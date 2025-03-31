@@ -1,0 +1,100 @@
+//==================================================================================================
+// SECTION 1: INPUT PARAMETERS - Organized into logical groups with tooltips
+//==================================================================================================
+
+// Main Strategy Parameters
+var section1 = "Strategy Settings"
+pivotType = input.string("Standard", "Pivot Calculation Method", options=["Standard", "Woodie", "Camarilla", "Fibonacci"], tooltip="Select the pivot calculation method to use for analysis", group=section1)
+showDaily = input.bool(true, "Show Daily Pivots", tooltip="Display daily timeframe pivot levels", group=section1)
+showWeekly = input.bool(true, "Show Weekly Pivots", tooltip="Display weekly timeframe pivot levels", group=section1)
+showMonthly = input.bool(false, "Show Monthly Pivots", tooltip="Display monthly timeframe pivot levels", group=section1)
+enableAutoMethodSelection = input.bool(true, "Auto-Select Pivot Method Based on Volatility", tooltip="Automatically choose the best pivot method for current market conditions", group=section1)
+virginPivotLookback = input.int(20, "Virgin Pivot Lookback (Bars)", minval=5, maxval=100, tooltip="Number of bars to check if a pivot has been tested before", group=section1)
+
+// Visualization Parameters
+var section2 = "Visualization Settings"
+pivotZoneWidth = input.float(0.25, "Pivot Zone Width (%)", minval=0.1, maxval=1.0, step=0.05, tooltip="Width of the zone around pivot levels (as percentage of price)", group=section2)
+showConfluence = input.bool(true, "Highlight Confluence Zones", tooltip="Highlight areas where multiple pivot levels overlap", group=section2)
+confluenceThreshold = input.float(0.3, "Confluence Threshold (%)", minval=0.1, maxval=1.0, step=0.05, tooltip="Maximum distance between pivots to be considered confluent (as percentage of price)", group=section2)
+showOptionIndicators = input.bool(true, "Show Option-Specific Indicators", tooltip="Display additional indicators relevant to options trading", group=section2)
+maxDrawingObjects = input.int(200, "Maximum Drawing Objects", minval=50, maxval=500, step=10, tooltip="Limit the number of drawing objects to prevent memory issues", group=section2)
+
+// Weighted Volume Parameters
+var section_vol = "Weighted Volume Settings"
+volumeMALength = input.int(20, "Volume MA Length", minval=1, group=section_vol)
+volumeSpikeFactor = input.float(1.5, "Volume Spike Threshold", minval=1.0, step=0.1, group=section_vol)
+useSmartVolume = input.bool(true, "Use Smart Volume Calculation", group=section_vol)
+volumeSmoothing = input.int(3, "Volume Smoothing", minval=1, group=section_vol)
+
+// Nifty 50 Constituents Definition
+var section_const = "Constituents"
+// Define top 10 NIFTY 50 constituents and their weights (as of Feb 28, 2025)
+constSymbol1 = input.string("NSE:HDFCBANK", "Constituent 1 Symbol", group=section_const)
+constWeight1 = input.float(0.1328, "Constituent 1 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol2 = input.string("NSE:ICICIBANK", "Constituent 2 Symbol", group=section_const)
+constWeight2 = input.float(0.0857, "Constituent 2 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol3 = input.string("NSE:RELIANCE", "Constituent 3 Symbol", group=section_const)
+constWeight3 = input.float(0.0821, "Constituent 3 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol4 = input.string("NSE:INFY", "Constituent 4 Symbol", group=section_const)
+constWeight4 = input.float(0.0613, "Constituent 4 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol5 = input.string("NSE:BHARTIARTL", "Constituent 5 Symbol", group=section_const)
+constWeight5 = input.float(0.0425, "Constituent 5 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol6 = input.string("NSE:LT", "Constituent 6 Symbol", group=section_const)
+constWeight6 = input.float(0.0376, "Constituent 6 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol7 = input.string("NSE:ITC", "Constituent 7 Symbol", group=section_const)
+constWeight7 = input.float(0.0370, "Constituent 7 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol8 = input.string("NSE:TCS", "Constituent 8 Symbol", group=section_const)
+constWeight8 = input.float(0.0359, "Constituent 8 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol9 = input.string("NSE:AXISBANK", "Constituent 9 Symbol", group=section_const)
+constWeight9 = input.float(0.0292, "Constituent 9 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol10 = input.string("NSE:KOTAKBANK", "Constituent 10 Symbol", group=section_const)
+constWeight10 = input.float(0.0282, "Constituent 10 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+// Signal Filter Parameters
+var section3 = "Signal Filters"
+enableVolumeFilter = input.bool(true, "Enable Volume Filter", tooltip="Require volume confirmation for signals", group=section3)
+volumeThreshold = input.float(1.5, "Volume Threshold Multiplier", minval=1.0, maxval=3.0, step=0.1, tooltip="Minimum volume required as multiple of average volume", group=section3)
+enablePatternFilter = input.bool(true, "Enable Candlestick Pattern Filter", tooltip="Require candlestick pattern confirmation for signals", group=section3)
+enableRsiFilter = input.bool(true, "Enable RSI Filter", tooltip="Use RSI as an additional filter for signals", group=section3)
+rsiThreshold = input.int(30, "RSI Threshold", minval=20, maxval=40, tooltip="RSI threshold for oversold conditions", group=section3)
+minConfluenceForSignal = input.int(2, "Minimum Confluence Count for Signal", minval=1, maxval=3, tooltip="Minimum number of confluent pivots required for a valid signal", group=section3)
+minSignalScore = input.int(60, "Minimum Signal Score (0-100)", minval=0, maxval=100, tooltip="Minimum score required for a valid trading signal", group=section3)
+
+// Strategy Types to Monitor
+var section4 = "Strategy Types"
+showPivotBounceSignals = input.bool(true, "Show Pivot Bounce Signals", tooltip="Display signals for price bouncing off pivot levels", group=section4)
+showPivotBreakoutSignals = input.bool(true, "Show Pivot Breakout Signals", tooltip="Display signals for price breaking through pivot levels", group=section4)
+showRangeSignals = input.bool(true, "Show Range-Based Signals", tooltip="Display signals for range-bound price action between pivots", group=section4)
+
+// Risk Management Parameters
+var section5 = "Risk Management"
+accountSize = input.float(1000000, "Account Size", minval=10000, tooltip="Your trading account size for position sizing calculations", group=section5)
+baseRiskPercent = input.float(1.5, "Base Risk Percentage", minval=0.5, maxval=5.0, step=0.1, tooltip="Base percentage of account to risk per trade", group=section5)
+maxDailyDrawdown = input.float(3.0, "Max Daily Drawdown %", minval=1.0, maxval=10.0, step=0.5, tooltip="Maximum acceptable daily drawdown percentage", group=section5)
+maxPositionSize = input.int(10, "Maximum Position Size (Lots)", minval=1, step=1, tooltip="Maximum number of lots for any trade", group=section5)
+adaptPositionToVolatility = input.bool(true, "Adapt Position Size to Volatility", tooltip="Automatically adjust position size based on current volatility", group=section5)
+lotSize = input.int(50, "Nifty 50 Lot Size", minval=1, step=1, tooltip="Number of shares/contracts per lot", group=section5)
+
+// Options Specific Parameters
+var section6 = "Options Parameters"
+daysToExpiry = input.int(15, "Default Days to Expiry", minval=7, maxval=45, step=1, tooltip="Default number of days to expiration for options", group=section6)
+adaptDteToVolatility = input.bool(true, "Adapt DTE to Volatility", tooltip="Adjust days to expiry based on volatility regime", group=section6)
+profitTargetPercent = input.int(60, "Profit Target Percentage", minval=30, maxval=90, step=5, tooltip="Target percentage of maximum profit for options trades", group=section6)
+useFixedStopLoss = input.bool(false, "Use Fixed Stop Loss", tooltip="Use a fixed percentage stop loss instead of ATR-based", group=section6)
+fixedStopLossPercent = input.float(30, "Fixed Stop Loss Percentage", minval=10, maxval=50, step=5, tooltip="Fixed stop loss as percentage of option premium", group=section6)
+atrStopMultiplier = input.float(1.2, "ATR Stop Multiplier", minval=0.5, maxval=3.0, step=0.1, tooltip="Multiplier for ATR-based stop loss", group=section6)
+
+// Alert Parameters
+var section7 = "Alerts"
+enableAlerts = input.bool(true, "Enable Alerts", tooltip="Generate alerts when trading signals occur", group=section7)
+alertDistance = input.float(0.5, "Alert Distance (%)", minval=0.1, maxval=2.0, step=0.1, tooltip="Distance from pivot level to trigger alerts", group=section7)
+detailedAlerts = input.bool(true, "Detailed Alert Messages", tooltip="Include comprehensive trade details in alert messages", group=section7)

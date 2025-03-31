@@ -1,0 +1,113 @@
+//==================================================================================================
+// SECTION 3: WEIGHTED VOLUME CALCULATION WITH REAL DATA
+//==================================================================================================
+
+// FIXED: Calculate weighted volume using real constituent data with improved error handling
+calculate_weighted_volume() =>
+    // FIXED: Added proper error handling for security calls and initialized with default values
+    float vol1 = 0.0
+    float vol2 = 0.0
+    float vol3 = 0.0
+    float vol4 = 0.0
+    float vol5 = 0.0
+    float vol6 = 0.0
+    float vol7 = 0.0
+    float vol8 = 0.0
+    float vol9 = 0.0
+    float vol10 = 0.0
+    
+    // FIXED: Modified security calls to prevent repainting
+    vol1 := request.security(constSymbol1, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol1 := na(vol1) ? 0.0 : vol1
+
+    vol2 := request.security(constSymbol2, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol2 := na(vol2) ? 0.0 : vol2
+
+    vol3 := request.security(constSymbol3, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol3 := na(vol3) ? 0.0 : vol3
+
+    vol4 := request.security(constSymbol4, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol4 := na(vol4) ? 0.0 : vol4
+
+    vol5 := request.security(constSymbol5, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol5 := na(vol5) ? 0.0 : vol5
+
+    vol6 := request.security(constSymbol6, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol6 := na(vol6) ? 0.0 : vol6
+
+    vol7 := request.security(constSymbol7, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol7 := na(vol7) ? 0.0 : vol7
+
+    vol8 := request.security(constSymbol8, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol8 := na(vol8) ? 0.0 : vol8
+
+    vol9 := request.security(constSymbol9, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol9 := na(vol9) ? 0.0 : vol9
+
+    vol10 := request.security(constSymbol10, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol10 := na(vol10) ? 0.0 : vol10
+    
+    // Check if all volumes are 0 or NA, indicating possible data issues
+    allZero = vol1 == 0 and vol2 == 0 and vol3 == 0 and vol4 == 0 and vol5 == 0
+    
+    // FIXED: Improved fallback mechanism with volume[1] to prevent repainting
+    if allZero
+        // Fallback to current symbol volume if constituent data is unavailable
+        volume[1]  // Use previous bar's volume to prevent repainting
+    else
+        // Calculate weighted volume
+        weightedVol = vol1 * constWeight1 + 
+                     vol2 * constWeight2 + 
+                     vol3 * constWeight3 + 
+                     vol4 * constWeight4 + 
+                     vol5 * constWeight5 + 
+                     vol6 * constWeight6 + 
+                     vol7 * constWeight7 + 
+                     vol8 * constWeight8 + 
+                     vol9 * constWeight9 + 
+                     vol10 * constWeight10
+        
+        // Apply smoothing if enabled
+        if volumeSmoothing > 1
+            weightedVol := ta.sma(weightedVol, volumeSmoothing)
+        
+        weightedVol
+
+// FIXED: Calculate Smart Volume using weighted constituent volume with improved error handling
+calculate_smart_volume() =>
+    float result = 0.0
+    
+    // Get weighted volume from top 10 constituents
+    result := calculate_weighted_volume()
+    
+    // Additional processing for smart volume
+    if useSmartVolume
+        // Apply a standardization to ensure the volume is in a useful range
+        // Normalize using moving average to handle varying volume scales
+        volMA = ta.sma(result, 10)
+        // FIXED: Added safeguard against division by zero
+        result := volMA > 0 ? result / volMA * 1000 : result
+    
+    result
+
+// FIXED: Detect Volume Spikes using weighted volume with improved error handling
+detect_volume_spike(vol, threshold) =>
+    // FIXED: Added safeguard for NA values
+    float safeVol = na(vol) ? 0.0 : vol
+    float safeThreshold = na(threshold) ? 1.5 : threshold
+    
+    // Extract ta.sma call to ensure it's called consistently on each calculation
+    float volMA = ta.sma(safeVol, volumeMALength)
+    bool isSpike = volMA > 0 and safeVol >= volMA * safeThreshold
+    [isSpike, volMA]
+
+// FIXED: Properly initializing variables to prevent undefined references
+var float smartVolume = 0.0
+var float volumeMA = 0.0
+var bool isVolumeSpike = false
+
+// FIXED: Only calculate on bar confirmation to improve performance
+if barstate.isconfirmed
+    smartVolume := calculate_smart_volume()
+    [isVolumeSpike, volumeMA] = detect_volume_spike(smartVolume, volumeSpikeFactor)
+

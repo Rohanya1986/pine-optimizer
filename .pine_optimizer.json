@@ -1,0 +1,29 @@
+{
+  "original_script": "original.pine",
+  "working_script": "working.pine",
+  "last_backup": "backups/merge-script-fixed-complete.txt_20250331_205038",
+  "sections": {
+    "INPUT PARAMETERS": "sections/input_parameters.pine",
+    "VOLATILITY ANALYSIS AND REGIME CLASSIFICATION": "sections/volatility_analysis_and_regime_classification.pine",
+    "WEIGHTED VOLUME CALCULATION WITH REAL DATA": "sections/weighted_volume_calculation_with_real_data.pine",
+    "PIVOT POINT CALCULATION METHODS": "sections/pivot_point_calculation_methods.pine",
+    "MULTI": "sections/multi.pine",
+    "PIVOT ARRAYS AND LABELS WITH IMPROVED MEMORY MANAGEMENT": "sections/pivot_arrays_and_labels_with_improved_memory_management.pine",
+    "PIVOT ZONE AND CONFLUENCE DETECTION WITH OPTIMIZATIONS": "sections/pivot_zone_and_confluence_detection_with_optimizations.pine",
+    "ENHANCED SIGNAL FILTERING WITH MULTI": "sections/enhanced_signal_filtering_with_multi.pine",
+    "ENHANCED STRATEGY SIGNAL CALCULATION WITH VIRGIN PIVOT DETECTION": "sections/enhanced_strategy_signal_calculation_with_virgin_pivot_detection.pine",
+    "OPTIONS STRATEGY SELECTION AND MANAGEMENT": "sections/options_strategy_selection_and_management.pine",
+    "VISUALIZATION WITH IMPROVED MEMORY MANAGEMENT": "sections/visualization_with_improved_memory_management.pine",
+    "PLOTTING AND VISUALIZATION": "sections/plotting_and_visualization.pine",
+    "ALERTS AND PERFORMANCE TRACKING": "sections/alerts_and_performance_tracking.pine",
+    "VOLATILITY ANALYSIS": "sections/volatility_analysis.pine",
+    "WEIGHTED VOLUME CALCULATION": "sections/weighted_volume_calculation.pine",
+    "PIVOT POINT CALCULATION": "sections/pivot_point_calculation.pine",
+    "MULTI-TIMEFRAME DATA": "sections/multi-timeframe_data.pine",
+    "PIVOT ARRAYS AND LABELS": "sections/pivot_arrays_and_labels.pine",
+    "PIVOT ZONE AND CONFLUENCE DETECTION": "sections/pivot_zone_and_confluence_detection.pine",
+    "STRATEGY SIGNAL CALCULATION": "sections/strategy_signal_calculation.pine",
+    "OPTIONS STRATEGY SELECTION": "sections/options_strategy_selection.pine",
+    "VISUALIZATION": "sections/visualization.pine"
+  }
+}

@@ -1,0 +1,250 @@
+//==================================================================================================
+// SECTION 7: PIVOT ZONE AND CONFLUENCE DETECTION WITH OPTIMIZATIONS
+//==================================================================================================
+
+// FIXED: Check if price is near a pivot level with improved error handling
+isNearPivot(price, pivotLevel, width) =>
+    // FIXED: Improved error handling and percentage calculation
+    if na(price) or na(pivotLevel) or pivotLevel <= 0 or na(width) or width <= 0
+        false
+    else
+        percentWidth = pivotLevel * (width / 100)
+        price >= pivotLevel - percentWidth and price <= pivotLevel + percentWidth
+
+// FIXED: Function to predict potential volatility expansion after pivot test
+predictVolExpansion(is_virgin_pivot, confluence_count, current_atr) =>
+    // FIXED: Added comprehensive error checking
+    if na(current_atr) or current_atr <= 0 or na(is_virgin_pivot) or na(confluence_count)
+        current_atr
+    else
+        // Base expansion factor
+        expansion_factor = 1.0
+        
+        // Adjust based on pivot characteristics
+        if is_virgin_pivot
+            expansion_factor := expansion_factor * 1.5  // 50% more volatility expected
+        
+        // Adjust based on confluence strength
+        if confluence_count > 0
+            // FIXED: Corrected math operation for confluence adjustment
+            expansion_factor := expansion_factor * (1.0 + 0.1 * math.min(confluence_count, 5))
+        
+        // Predict expanded ATR
+        predicted_atr = current_atr * expansion_factor
+        
+        predicted_atr
+
+// FIXED: Detect time-based patterns for pivot testing with proper error handling
+isTimeBasedPivotTest() =>
+    // FIXED: Added proper time function error handling
+    int currentHour = na(time) ? 0 : hour(time)
+    int currentMinute = na(time) ? 0 : minute(time)
+    int currentDay = na(time) ? 0 : dayofweek(time)
+    
+    // Check for common pivot testing times for Nifty 50
+    // Market open test (9:15-9:45 AM IST)
+    market_open_test = currentHour == 9 and currentMinute >= 15 and currentMinute <= 45
+    
+    // End of day test (2:30-3:30 PM IST)
+    end_of_day_test = currentHour >= 14 and currentHour <= 15 and (currentHour < 15 or currentMinute <= 30)
+    
+    // Thursday expiry effect (increased volatility on expiry day)
+    thursday_expiry = currentDay == dayofweek.thursday
+    
+    market_open_test or end_of_day_test or thursday_expiry
+
+// FIXED: Optimized function to find confluence zones where multiple pivots align with better performance
+findConfluenceZones() =>
+    // FIXED: Initialize return arrays with proper size and type
+    float[] allPivotLevels = array.new_float(0)
+    string[] allPivotLabels = array.new_string(0)
+    string[] allPivotTimeframes = array.new_string(0)
+    bool[] allPivotVirgin = array.new_bool(0)
+    
+    // FIXED: Estimate total number of pivots from all timeframes for better memory allocation
+    dailySize = array.size(pivotLevelsDaily)
+    weeklySize = array.size(pivotLevelsWeekly)
+    monthlySize = array.size(pivotLevelsMonthly)
+    totalPivots = dailySize + weeklySize + monthlySize
+    
+    // Skip calculation if we don't have enough pivots
+    if totalPivots < minConfluenceForSignal
+        [array.new_float(0), array.new_string(0), array.new_int(0), array.new_string(0), array.new_bool(0)]
+    
+    // FIXED: Pre-allocate arrays with estimated capacity for better performance
+    allPivotLevels := array.new_float(totalPivots)
+    allPivotLabels := array.new_string(totalPivots)
+    allPivotTimeframes := array.new_string(totalPivots)
+    allPivotVirgin := array.new_bool(totalPivots)
+    
+    // Track actual number of valid pivots
+    pivotCount = 0
+    
+    // FIXED: Added comprehensive bound checking throughout collection loops
+    
+    // Collect daily pivots
+    if showDaily
+        for i = 0 to dailySize - 1
+            if i < array.size(pivotLabelsDaily) and i < array.size(pivotIsVirginDaily) and i < array.size(pivotLevelsDaily)
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0 and pivotCount < totalPivots
+                    array.set(allPivotLevels, pivotCount, level)
+                    array.set(allPivotLabels, pivotCount, array.get(pivotLabelsDaily, i))
+                    array.set(allPivotTimeframes, pivotCount, "D")
+                    array.set(allPivotVirgin, pivotCount, array.get(pivotIsVirginDaily, i))
+                    pivotCount += 1
+    
+    // Collect weekly pivots
+    if showWeekly
+        for i = 0 to weeklySize - 1
+            if i < array.size(pivotLabelsWeekly) and i < array.size(pivotIsVirginWeekly) and i < array.size(pivotLevelsWeekly)
+                level = array.get(pivotLevelsWeekly, i)
+                if not na(level) and level > 0 and pivotCount < totalPivots
+                    array.set(allPivotLevels, pivotCount, level)
+                    array.set(allPivotLabels, pivotCount, array.get(pivotLabelsWeekly, i))
+                    array.set(allPivotTimeframes, pivotCount, "W")
+                    array.set(allPivotVirgin, pivotCount, array.get(pivotIsVirginWeekly, i))
+                    pivotCount += 1
+    
+    // Collect monthly pivots
+    if showMonthly
+        for i = 0 to monthlySize - 1
+            if i < array.size(pivotLabelsMonthly) and i < array.size(pivotIsVirginMonthly) and i < array.size(pivotLevelsMonthly)
+                level = array.get(pivotLevelsMonthly, i)
+                if not na(level) and level > 0 and pivotCount < totalPivots
+                    array.set(allPivotLevels, pivotCount, level)
+                    array.set(allPivotLabels, pivotCount, array.get(pivotLabelsMonthly, i))
+                    array.set(allPivotTimeframes, pivotCount, "M")
+                    array.set(allPivotVirgin, pivotCount, array.get(pivotIsVirginMonthly, i))
+                    pivotCount += 1
+    
+    // FIXED: Resize arrays to actual count of valid pivots
+    if pivotCount < totalPivots
+        array.resize(allPivotLevels, pivotCount)
+        array.resize(allPivotLabels, pivotCount)
+        array.resize(allPivotTimeframes, pivotCount)
+        array.resize(allPivotVirgin, pivotCount)
+    
+    // FIXED: Estimate maximum number of confluence zones
+    maxConfluences = math.min(pivotCount, 10)
+    
+    // FIXED: Initialize confluence arrays with estimated capacity
+    confluenceZones = array.new_float(maxConfluences)
+    confluenceLabels = array.new_string(maxConfluences)
+    confluenceCounts = array.new_int(maxConfluences)
+    confluenceTypes = array.new_string(maxConfluences)
+    confluenceVirgin = array.new_bool(maxConfluences)
+    
+    confluenceCount = 0
+    
+    // Find confluence zones with optimized processing
+    if pivotCount > 0
+        // FIXED: Track processed pivots to avoid duplication
+        processedPivots = array.new_bool(pivotCount, false)
+        
+        for i = 0 to pivotCount - 1
+            // Skip already processed pivots
+            if array.get(processedPivots, i)
+                continue
+            
+            level = array.get(allPivotLevels, i)
+            label = array.get(allPivotLabels, i)
+            timeframe = array.get(allPivotTimeframes, i)
+            isVirgin = array.get(allPivotVirgin, i)
+            
+            // Skip invalid levels
+            if na(level) or level <= 0
+                continue
+            
+            // Mark this pivot as processed
+            array.set(processedPivots, i, true)
+            
+            // Initialize count and labels for this potential confluence
+            count = 1  // Start with 1 (itself)
+            confluenceLabelsTemp = label
+            
+            // FIXED: Added safeguard for label length and proper substring extraction
+            firstChar = label.length() >= 4 ? str.substring(label, 2, 3) : "P" // Get first char after timeframe prefix
+            
+            confluenceTypesTemp = firstChar == "S" or firstChar == "L" ? "S" : 
+                                  firstChar == "R" or firstChar == "H" ? "R" : "P"
+            
+            // Look for other pivots that are confluent with this one
+            for j = i + 1 to pivotCount - 1
+                // Skip already processed pivots
+                if j >= array.size(processedPivots) or array.get(processedPivots, j)
+                    continue
+                
+                // FIXED: Added proper bounds checking for all array accesses
+                if j < array.size(allPivotLevels)
+                    compareLevel = array.get(allPivotLevels, j)
+                    
+                    // Skip invalid levels
+                    if na(compareLevel) or compareLevel <= 0
+                        continue
+                    
+                    // FIXED: Quick distance check before more expensive isNearPivot call
+                    levelDiff = math.abs(level - compareLevel)
+                    quickThreshold = level * (confluenceThreshold / 100)
+                    
+                    if levelDiff <= quickThreshold and j < array.size(allPivotLabels) and j < array.size(allPivotTimeframes)
+                        compareLabel = array.get(allPivotLabels, j)
+                        compareTimeframe = array.get(allPivotTimeframes, j)
+                        
+                        count += 1
+                        confluenceLabelsTemp := confluenceLabelsTemp + "+" + compareLabel
+                        
+                        // If from different timeframe, this is more significant
+                        if timeframe != compareTimeframe
+                            count += 1
+                        
+                        // Mark this pivot as processed
+                        array.set(processedPivots, j, true)
+            
+            // If we found enough confluent pivots, add to results
+            if count >= minConfluenceForSignal and confluenceCount < maxConfluences
+                array.set(confluenceZones, confluenceCount, level)
+                array.set(confluenceLabels, confluenceCount, confluenceLabelsTemp)
+                array.set(confluenceCounts, confluenceCount, count)
+                array.set(confluenceTypes, confluenceCount, confluenceTypesTemp)
+                array.set(confluenceVirgin, confluenceCount, isVirgin)
+                confluenceCount += 1
+    
+    // FIXED: Resize confluence arrays to actual count
+    if confluenceCount < maxConfluences
+        array.resize(confluenceZones, confluenceCount)
+        array.resize(confluenceLabels, confluenceCount)
+        array.resize(confluenceCounts, confluenceCount)
+        array.resize(confluenceTypes, confluenceCount)
+        array.resize(confluenceVirgin, confluenceCount)
+    
+    [confluenceZones, confluenceLabels, confluenceCounts, confluenceTypes, confluenceVirgin]
+
+// FIXED: Cache for confluence zones (updated only on bar confirmation)
+var float[] confluenceZones = array.new_float(0)
+var string[] confluenceLabels = array.new_string(0)
+var int[] confluenceCounts = array.new_int(0)
+var string[] confluenceTypes = array.new_string(0)
+var bool[] confluenceVirgin = array.new_bool(0)
+
+// FIXED: Only recalculate confluence on bar confirmation (optimization)
+if barstate.isconfirmed
+    [newConfluenceZones, newConfluenceLabels, newConfluenceCounts, newConfluenceTypes, newConfluenceVirgin] = findConfluenceZones()
+    
+    // FIXED: Replace confluences with new values - reusing arrays
+    array.clear(confluenceZones)
+    array.clear(confluenceLabels)
+    array.clear(confluenceCounts)
+    array.clear(confluenceTypes)
+    array.clear(confluenceVirgin)
+    
+    // Copy new values to cached arrays with proper bounds checking
+    // FIXED: Added bounds checking for all array operations
+    for i = 0 to array.size(newConfluenceZones) - 1
+        if i < array.size(newConfluenceLabels) and i < array.size(newConfluenceCounts) and 
+           i < array.size(newConfluenceTypes) and i < array.size(newConfluenceVirgin)
+            array.push(confluenceZones, array.get(newConfluenceZones, i))
+            array.push(confluenceLabels, array.get(newConfluenceLabels, i))
+            array.push(confluenceCounts, array.get(newConfluenceCounts, i))
+            array.push(confluenceTypes, array.get(newConfluenceTypes, i))
+            array.push(confluenceVirgin, array.get(newConfluenceVirgin, i))

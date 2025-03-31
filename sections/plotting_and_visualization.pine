@@ -1,0 +1,35 @@
+//==================================================================================================
+// SECTION 12: PLOTTING AND VISUALIZATION
+//==================================================================================================
+
+// FIXED: Draw visualization elements only on last bar for better performance
+if barstate.islast
+    drawPivots()
+    drawConfluenceZones()
+    createOptionIndicatorsTable()
+    createStrategySignalsTable()
+
+// FIXED: Plot signals on the chart with better conditional plotting
+plotshape(showPivotBounceSignals and bounceSignal == "Buy", "Pivot Bounce Buy", 
+         shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(showPivotBounceSignals and bounceSignal == "Sell", "Pivot Bounce Sell", 
+         shape.triangledown, location.abovebar, color.red, size=size.small)
+plotshape(showPivotBreakoutSignals and breakoutSignal == "Buy", "Pivot Breakout Buy", 
+         shape.circle, location.belowbar, color.lime, size=size.small)
+plotshape(showPivotBreakoutSignals and breakoutSignal == "Sell", "Pivot Breakout Sell", 
+         shape.circle, location.abovebar, color.orange, size=size.small)
+plotshape(showRangeSignals and rangeSignal == "Range", "Range Signal", 
+         shape.diamond, location.abovebar, color.blue, size=size.small)
+
+// FIXED: Plot volume indicators with better error handling
+// FIXED: Added safeguard for volume spike plotting
+plotchar(isVolumeSpike and not na(smartVolume) ? smartVolume : na, "Volume Spike", "▲", location.bottom, color.green, size=size.tiny)
+plot(showOptionIndicators ? volumeMA : na, "Weighted Volume MA", color.gray, 1, plot.style_line, display=display.data_window)
+
+// Optional: Plot volatility bands
+// FIXED: Added safeguard for volatility bands
+volatilityUpper = ta.sma(close, 20) + (na(atrValue) ? 0 : atrValue * 2)
+volatilityLower = ta.sma(close, 20) - (na(atrValue) ? 0 : atrValue * 2)
+plot(showOptionIndicators ? volatilityUpper : na, "Volatility Upper Band", color.new(color.purple, 80), 1, plot.style_line)
+plot(showOptionIndicators ? volatilityLower : na, "Volatility Lower Band", color.new(color.purple, 80), 1, plot.style_line)
+

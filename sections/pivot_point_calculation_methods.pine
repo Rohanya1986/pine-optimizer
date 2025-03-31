@@ -1,0 +1,84 @@
+//==================================================================================================
+// SECTION 4: PIVOT POINT CALCULATION METHODS - Robust implementations with error handling
+//==================================================================================================
+
+// FIXED: Standard Floor Trader Pivots with enhanced error handling
+calcStandardPivots(high, low, close) =>
+    // FIXED: Enhanced error handling with explicit return of properly sized array
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + close) / 3
+        r1 = (2 * p) - low
+        s1 = (2 * p) - high
+        r2 = p + (high - low)
+        s2 = p - (high - low)
+        r3 = high + 2 * (p - low)
+        s3 = low - 2 * (high - p)
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Woodie's Pivots with enhanced error handling
+calcWoodiePivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + 2 * close) / 4  // More weight to close
+        r1 = (2 * p) - low
+        s1 = (2 * p) - high
+        r2 = p + (high - low)
+        s2 = p - (high - low)
+        r3 = r1 + (high - low)
+        s3 = s1 - (high - low)
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Camarilla Pivots with enhanced error handling
+calcCamarillaPivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(9, 0)  // Return zeros if inputs are NA or invalid
+    else
+        price_range = high - low
+        h4 = close + price_range * 1.1 / 2
+        h3 = close + price_range * 1.1 / 4
+        h2 = close + price_range * 1.1 / 6
+        h1 = close + price_range * 1.1 / 12
+        l1 = close - price_range * 1.1 / 12
+        l2 = close - price_range * 1.1 / 6
+        l3 = close - price_range * 1.1 / 4
+        l4 = close - price_range * 1.1 / 2
+        p = (high + low + close) / 3
+        array.from(p, h1, h2, h3, h4, l1, l2, l3, l4)
+
+// FIXED: Fibonacci Pivots with enhanced error handling
+calcFibonacciPivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + close) / 3
+        price_range = high - low
+        r1 = p + 0.382 * price_range
+        r2 = p + 0.618 * price_range
+        r3 = p + 1.000 * price_range
+        s1 = p - 0.382 * price_range
+        s2 = p - 0.618 * price_range
+        s3 = p - 1.000 * price_range
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Function to get appropriate pivots based on selected method with improved error handling
+getPivots(high, low, close, method) =>
+    // FIXED: Initialize result with proper default before conditional logic
+    float[] result = array.new_float(7, 0)
+    
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        result
+    else
+        if method == "Standard"
+            result := calcStandardPivots(high, low, close)
+        else if method == "Woodie"
+            result := calcWoodiePivots(high, low, close)
+        else if method == "Camarilla"
+            result := calcCamarillaPivots(high, low, close)
+        else if method == "Fibonacci"
+            result := calcFibonacciPivots(high, low, close)
+        else
+            result := calcStandardPivots(high, low, close)  // Default to Standard
+        result

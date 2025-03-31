@@ -1,0 +1,85 @@
+//==================================================================================================
+// SECTION 8: ENHANCED SIGNAL FILTERING WITH MULTI-FACTOR APPROACH
+//==================================================================================================
+
+// FIXED: Volume filter with improved error handling
+volumeFilter(current_volume, avg_volume, pivot_type) =>
+    // FIXED: Added comprehensive error handling
+    if not enableVolumeFilter or na(current_volume) or na(avg_volume) or avg_volume <= 0 or na(pivot_type)
+        true
+    else
+        // Base threshold varies by pivot type - more important levels need more volume
+        threshold = 0.0
+        // FIXED: Added proper string handling with contains
+        if str.contains(pivot_type, "PP") or str.contains(pivot_type, "R1") or str.contains(pivot_type, "S1")
+            threshold := adaptedVolumeThreshold
+        else
+            threshold := adaptedVolumeThreshold + 0.3
+        current_volume > avg_volume * threshold
+
+// FIXED: Candlestick pattern filter with improved error handling
+patternFilter(signal_type) =>
+    // FIXED: Added check for invalid signal type
+    if not enablePatternFilter or na(signal_type) or (signal_type != "bullish" and signal_type != "bearish")
+        true
+    else
+        if signal_type == "bullish"
+            // Bullish patterns
+            hammer = low < open and close > open and (high - close) < (close - low) / 2 and (close - open) < (close - low) / 3
+            bullish_engulfing = close > open and close > high[1] and open < low[1]
+            morning_star = close[2] < open[2] and math.abs(close[1] - open[1]) < math.abs(close[2] - open[2])/3 and close > open and close > close[1] + math.abs(close[2] - open[2])/3
+            hammer or bullish_engulfing or morning_star
+        else
+            // Bearish patterns
+            shooting_star = high > close and close < open and (high - close) > (open - low) * 2 and (open - close) < (high - open) / 3
+            bearish_engulfing = close < open and close < low[1] and open > high[1]
+            evening_star = close[2] > open[2] and math.abs(close[1] - open[1]) < math.abs(close[2] - open[2])/3 and close < open and close < close[1] - math.abs(close[2] - open[2])/3
+            shooting_star or bearish_engulfing or evening_star
+
+// FIXED: RSI filter with improved error handling
+rsiFilter(rsi_value, signal_type) =>
+    // FIXED: Added check for invalid signal type
+    if not enableRsiFilter or na(rsi_value) or na(signal_type) or (signal_type != "bullish" and signal_type != "bearish")
+        true
+    else
+        if signal_type == "bullish"
+            rsi_value < rsiThreshold and rsi_value > rsi_value[1]  // Oversold and turning up
+        else
+            rsi_value > (100 - rsiThreshold) and rsi_value < rsi_value[1]  // Overbought and turning down
+
+// Pre-calculate common indicators used in filters for better performance
+rsiValue = ta.rsi(close, 14)   // RSI value
+
+// FIXED: Enhanced multi-factor filter with weighted scoring and improved error handling
+multiFactorFilterScore(signal_type, pivot_type, confluence_strength, is_virgin_pivot) =>
+    // FIXED: Added comprehensive error checking for parameters
+    if na(signal_type) or na(pivot_type) or na(confluence_strength) or na(is_virgin_pivot)
+        [0, "low"]
+    else
+        // Initialize score components
+        volume_score = volumeFilter(smartVolume, volumeMA, pivot_type) ? 30 : 0
+        pattern_score = patternFilter(signal_type) ? 25 : 0
+        rsi_score = rsiFilter(rsiValue, signal_type) ? 15 : 0
+        conf_score = math.min(confluence_strength, 3) * 5  // 0-15 points based on strength
+        virgin_score = is_virgin_pivot ? 10 : 0
+        volume_spike_score = isVolumeSpike ? 10 : 0  // Additional score for volume spike
+        
+        // FIXED: Improved pivot type scoring with safer string handling
+        pivot_score = 2.5  // Default score for other levels
+        if str.contains(pivot_type, "PP")
+            pivot_score := 5  // Central pivot point
+        else if (str.contains(pivot_type, "S1") or str.contains(pivot_type, "R1") or 
+                str.contains(pivot_type, "H3") or str.contains(pivot_type, "L3"))
+            pivot_score := 4  // Key levels
+        
+        // Calculate total score (0-100)
+        total_score = volume_score + pattern_score + rsi_score + conf_score + virgin_score + pivot_score + volume_spike_score
+        
+        // Ensure score is within valid range 0-100
+        total_score := math.max(0, math.min(100, total_score))
+        
+        // Determine signal quality
+        signal_quality = total_score >= 70 ? "high" : total_score >= 50 ? "medium" : "low"
+        
+        [total_score, signal_quality]
+

@@ -1,0 +1,207 @@
+//==================================================================================================
+// SECTION 13: ALERTS AND PERFORMANCE TRACKING
+//==================================================================================================
+
+// Function to get the current signal values
+get_current_signal() =>
+    // Determine which signal to use (bounce or breakout)
+    signal = bounceSignal != "None" ? bounceSignal : breakoutSignal
+    level = bounceSignal != "None" ? bounceLevel : breakoutLevel
+    strength = bounceSignal != "None" ? bounceStrength : breakoutStrength
+    pivot_type = bounceSignal != "None" ? bouncePivotType : breakoutPivotType
+    is_virgin = bounceSignal != "None" ? bounceIsVirgin : breakoutIsVirgin
+    signal_score = bounceSignal != "None" ? bounceScore : breakoutScore
+    predicted_vol = bounceSignal != "None" ? bouncePredictedVol : breakoutPredictedVol
+    
+    [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+
+// FIXED: Trade signal variables for alert generation
+var string lastBounceSignal = "None"
+var string lastBreakoutSignal = "None"
+var string lastRangeSignal = "None"
+
+// FIXED: Performance tracking variables
+var int totalSignals = 0
+var int winningTrades = 0
+var int losingTrades = 0
+var float totalProfit = 0.0
+var float maxDrawdown = 0.0
+
+// FIXED: Track entry signals for performance monitoring
+var float entryPrice = 0.0
+var string entrySignal = "None"
+var float stopLossLevel = 0.0
+var float targetLevel = 0.0
+var int entryBar = 0
+
+// FIXED: Check for new signals and generate alerts
+if barstate.isconfirmed and enableAlerts
+    // Bounce signal alerts
+    if bounceSignal != "None" and (bounceSignal != lastBounceSignal or bounceLevel != 0.0)
+        totalSignals += 1
+        virgin_text = bounceIsVirgin ? "Virgin " : ""
+        strategy_name = getAdvancedOptionStrategy(bounceSignal, volRegime, bounceStrength, bounceIsVirgin, bouncePredictedVol, adaptedDte, 0)
+        
+        [target, distance] = getNextPivot(bounceSignal, close)
+        stop = getStopLoss(bounceSignal, bounceLevel, atrValue)
+        position = calculatePositionSize(bounceSignal, close, stop, bounceStrength, bounceIsVirgin)
+        
+        // Standard alert
+        base_alert = virgin_text + "Pivot Bounce " + bounceSignal + " Signal at " + str.tostring(close) + " (" + str.tostring(bounceScore) + "/100)"
+        
+        // Detailed alert with trade details
+        if detailedAlerts
+            alert_message = base_alert + "\n" +
+                          "Pivot: " + bouncePivotType + " at " + str.tostring(bounceLevel) + "\n" +
+                          "Strategy: " + strategy_name + "\n" +
+                          "Target: " + str.tostring(target) + "\n" +
+                          "Stop: " + str.tostring(stop) + "\n" +
+                          "Position: " + str.tostring(position) + " lots\n" +
+                          "Strength: " + str.tostring(bounceStrength) + "★\n" +
+                          "Volume Spike: " + (isVolumeSpike ? "Yes" : "No") + "\n" +
+                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 ? distance / math.abs(close - stop) : 0, "#.##")
+        else
+            alert_message = base_alert
+            
+        alert(alert_message, alert.freq_once_per_bar)
+        
+        // Set entry tracking variables
+        entryPrice := close
+        entrySignal := bounceSignal
+        stopLossLevel := stop
+        targetLevel := target
+        entryBar := bar_index
+    
+    // Breakout signal alerts
+    if breakoutSignal != "None" and (breakoutSignal != lastBreakoutSignal or breakoutLevel != 0.0)
+        totalSignals += 1
+        virgin_text = breakoutIsVirgin ? "Virgin " : ""
+        strategy_name = getAdvancedOptionStrategy(breakoutSignal, volRegime, breakoutStrength, breakoutIsVirgin, breakoutPredictedVol, adaptedDte, 0)
+        
+        [target, distance] = getNextPivot(breakoutSignal, close)
+        stop = getStopLoss(breakoutSignal, breakoutLevel, atrValue)
+        position = calculatePositionSize(breakoutSignal, close, stop, breakoutStrength, breakoutIsVirgin)
+        
+        // Standard alert
+        base_alert = virgin_text + "Pivot Breakout " + breakoutSignal + " Signal at " + str.tostring(close) + " (" + str.tostring(breakoutScore) + "/100)"
+        
+        // Detailed alert with trade details
+        if detailedAlerts
+            alert_message = base_alert + "\n" +
+                          "Pivot: " + breakoutPivotType + " at " + str.tostring(breakoutLevel) + "\n" +
+                          "Strategy: " + strategy_name + "\n" +
+                          "Target: " + str.tostring(target) + "\n" +
+                          "Stop: " + str.tostring(stop) + "\n" +
+                          "Position: " + str.tostring(position) + " lots\n" +
+                          "Strength: " + str.tostring(breakoutStrength) + "★\n" +
+                          "Volume Spike: " + (isVolumeSpike ? "Yes" : "No") + "\n" +
+                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 ? distance / math.abs(close - stop) : 0, "#.##")
+        else
+            alert_message = base_alert
+            
+        alert(alert_message, alert.freq_once_per_bar)
+        
+        // Set entry tracking variables
+        entryPrice := close
+        entrySignal := breakoutSignal
+        stopLossLevel := stop
+        targetLevel := target
+        entryBar := bar_index
+    
+    // Range signal alerts
+    if rangeSignal != "None" and (rangeSignal != lastRangeSignal or (rangeUpperLevel != 0.0 and rangeLowerLevel != 0.0))
+        totalSignals += 1
+        strategy_name = getAdvancedOptionStrategy(rangeSignal, volRegime, rangeStrength, false, atrValue, adaptedDte, 0)
+        
+        // Standard alert
+        base_alert = "Range-Bound Signal Detected (" + str.tostring(rangeScore) + "/100)"
+        
+        // Detailed alert with trade details
+        if detailedAlerts
+            alert_message = base_alert + "\n" +
+                          "Range: " + str.tostring(rangeLowerLevel) + " to " + str.tostring(rangeUpperLevel) + "\n" +
+                          "Strategy: " + strategy_name + "\n" +
+                          "Width: " + str.tostring(math.abs(rangeUpperLevel - rangeLowerLevel)) + "\n" +
+                          "Volume Stability: " + (isVolumeSpike ? "Unstable" : "Stable") + "\n" +
+                          "Strength: " + str.tostring(rangeStrength) + "★"
+        else
+            alert_message = base_alert
+            
+        alert(alert_message, alert.freq_once_per_bar)
+        
+        // Range signals don't use traditional entry tracking
+    
+    // Update last signal states
+    lastBounceSignal := bounceSignal
+    lastBreakoutSignal := breakoutSignal
+    lastRangeSignal := rangeSignal
+
+// FIXED: Simple performance tracking
+if entrySignal != "None" and entryPrice > 0
+    // For buy signals
+    if entrySignal == "Buy"
+        // Check if target hit (winning trade)
+        if high >= targetLevel and bar_index > entryBar
+            winningTrades += 1
+            trade_profit = (targetLevel - entryPrice) / entryPrice * 100
+            totalProfit += trade_profit
+            
+            // Reset tracking variables
+            entrySignal := "None"
+            entryPrice := 0.0
+            
+            if enableAlerts and detailedAlerts
+                alert("Target hit! Winning trade with profit: " + str.tostring(trade_profit, "#.##") + "%", alert.freq_once_per_bar)
+        
+        // Check if stop loss hit (losing trade)
+        else if low <= stopLossLevel and bar_index > entryBar
+            losingTrades += 1
+            trade_loss = (stopLossLevel - entryPrice) / entryPrice * 100
+            totalProfit += trade_loss  // Will be negative
+            maxDrawdown := math.min(maxDrawdown, trade_loss)
+            
+            // Reset tracking variables
+            entrySignal := "None"
+            entryPrice := 0.0
+            
+            if enableAlerts and detailedAlerts
+                alert("Stop loss hit! Losing trade with loss: " + str.tostring(trade_loss, "#.##") + "%", alert.freq_once_per_bar)
+    
+    // For sell signals
+    else if entrySignal == "Sell"
+        // Check if target hit (winning trade)
+        if low <= targetLevel and bar_index > entryBar
+            winningTrades += 1
+            trade_profit = (entryPrice - targetLevel) / entryPrice * 100
+            totalProfit += trade_profit
+            
+            // Reset tracking variables
+            entrySignal := "None"
+            entryPrice := 0.0
+            
+            if enableAlerts and detailedAlerts
+                alert("Target hit! Winning trade with profit: " + str.tostring(trade_profit, "#.##") + "%", alert.freq_once_per_bar)
+        
+        // Check if stop loss hit (losing trade)
+        else if high >= stopLossLevel and bar_index > entryBar
+            losingTrades += 1
+            trade_loss = (entryPrice - stopLossLevel) / entryPrice * 100
+            totalProfit += trade_loss  // Will be negative
+            maxDrawdown := math.min(maxDrawdown, trade_loss)
+            
+            // Reset tracking variables
+            entrySignal := "None"
+            entryPrice := 0.0
+            
+            if enableAlerts and detailedAlerts
+                alert("Stop loss hit! Losing trade with loss: " + str.tostring(trade_loss, "#.##") + "%", alert.freq_once_per_bar)
+
+// Create custom alert conditions for volume spikes at pivots
+// FIXED: Added proper array bounds checking for alert conditions
+alertcondition(isVolumeSpike and array.size(pivotLevelsDaily) > 0 and isNearPivot(close, array.get(pivotLevelsDaily, 0), pivotZoneWidth * 2) or 
+                                showWeekly and array.size(pivotLevelsWeekly) > 0 and isNearPivot(close, array.get(pivotLevelsWeekly, 0), pivotZoneWidth * 2), 
+              "Volume Spike at Pivot", "Volume spike detected near a major pivot level")
+
+// Alert for virgin pivot levels being tested
+alertcondition(bounceIsVirgin and bounceSignal != "None", "Virgin Pivot Test", 
+               "Price is testing a virgin pivot level at " + str.tostring(bounceLevel))

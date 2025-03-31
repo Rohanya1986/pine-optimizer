@@ -1,0 +1,475 @@
+//==================================================================================================
+// SECTION 9: ENHANCED STRATEGY SIGNAL CALCULATION WITH VIRGIN PIVOT DETECTION
+//==================================================================================================
+
+// FIXED: Optimized signal detection function that handles both bounce and breakout signals
+calcSignal(signal_type) =>
+    // FIXED: Properly initialize return values with default values
+    signal = "None"
+    level = 0.0
+    strength = 0
+    pivot_type = ""
+    is_virgin = false
+    signal_score = 0
+    predicted_vol = na(atrValue) ? 0.0 : atrValue
+    
+    // FIXED: Added validation for signal_type parameter
+    if na(signal_type) or (signal_type != "bounce" and signal_type != "breakout")
+        return [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+    
+    // FIXED: Quick check for price near pivots - if price is not near any pivot and not the last bar, exit early
+    // This optimization significantly reduces computation when there's no signal potential
+    if (array.size(pivotLevelsDaily) > 0 or array.size(pivotLevelsWeekly) > 0) and not barstate.islast
+        nearPivot = false
+        
+        // Check a few daily pivots
+        for i = 0 to math.min(array.size(pivotLevelsDaily), 3) - 1
+            if i < array.size(pivotLevelsDaily)
+                pivotLevel = array.get(pivotLevelsDaily, i)
+                if not na(pivotLevel) and pivotLevel > 0 and isNearPivot(close, pivotLevel, pivotZoneWidth * 4)
+                    nearPivot := true
+                    break
+        
+        // Check a few weekly pivots if still not near
+        if not nearPivot and showWeekly
+            for i = 0 to math.min(array.size(pivotLevelsWeekly), 3) - 1
+                if i < array.size(pivotLevelsWeekly)
+                    pivotLevel = array.get(pivotLevelsWeekly, i)
+                    if not na(pivotLevel) and pivotLevel > 0 and isNearPivot(close, pivotLevel, pivotZoneWidth * 4)
+                        nearPivot := true
+                        break
+        
+        // If not near any pivot, exit early
+        if not nearPivot
+            return [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+    
+    // FIXED: Early exit if we don't have necessary data
+    if array.size(pivotLevelsDaily) == 0 and array.size(pivotLevelsWeekly) == 0
+        return [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+    
+    // Check daily pivots first
+    if array.size(pivotLevelsDaily) > 0
+        // FIXED: Added comprehensive bounds checking in pivots loop
+        for i = 0 to array.size(pivotLevelsDaily) - 1
+            if i >= array.size(pivotLabelsDaily) or i >= array.size(pivotIsVirginDaily) or i >= array.size(pivotLevelsDaily)
+                continue
+                
+            currentLevel = array.get(pivotLevelsDaily, i)
+            currentLabel = array.get(pivotLabelsDaily, i)
+            currentVirgin = array.get(pivotIsVirginDaily, i)
+            
+            // Skip invalid levels
+            if na(currentLevel) or currentLevel <= 0 or na(currentLabel)
+                continue
+            
+            if signal_type == "bounce"
+                // Bullish bounce from support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L")) and 
+                   low <= currentLevel and close > currentLevel and low[1] > currentLevel
+                    
+                    // Check for confirmation (2-candle pattern)
+                    if low[1] > currentLevel  // Previous candle didn't touch support
+                        // Get signal score using multi-factor filter
+                        confluenceStrength = 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and 
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        confluenceStrength := math.min(confCount, 3)
+                                        break
+                        
+                        [score, quality] = multiFactorFilterScore("bullish", currentLabel, confluenceStrength, currentVirgin)
+                        
+                        // Check if score meets minimum threshold
+                        if score >= minSignalScore
+                            signal := "Buy"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := confluenceStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, confluenceStrength, atrValue)
+                            break
+                
+                // Bearish bounce from resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H")) and 
+                   high >= currentLevel and close < currentLevel and high[1] < currentLevel
+                    
+                    // Check for confirmation (2-candle pattern)
+                    if high[1] < currentLevel  // Previous candle didn't touch resistance
+                        // Get signal score using multi-factor filter
+                        confluenceStrength = 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        confluenceStrength := math.min(confCount, 3)
+                                        break
+                        
+                        [score, quality] = multiFactorFilterScore("bearish", currentLabel, confluenceStrength, currentVirgin)
+                        
+                        // Check if score meets minimum threshold
+                        if score >= minSignalScore
+                            signal := "Sell"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := confluenceStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, confluenceStrength, atrValue)
+                            break
+            
+            else if signal_type == "breakout"
+                // Bullish breakout above resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H") or currentLabel == "D-PP") and 
+                   close > currentLevel and close[1] <= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close > open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        // Initial strength assessment
+                        breakoutStrength = 1
+                        
+                        // Add strength if breakout volume is high or is a spike
+                        if smartVolume > volumeMA * 1.5 or isVolumeSpike
+                            breakoutStrength := breakoutStrength + 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        breakoutStrength := math.min(breakoutStrength + 1, 3)
+                                        break
+                        
+                        // Calculate score
+                        [score, quality] = multiFactorFilterScore("bullish", currentLabel, breakoutStrength, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Buy"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := breakoutStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, breakoutStrength, atrValue)
+                            break
+                
+                // Bearish breakout below support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L") or currentLabel == "D-PP") and 
+                   close < currentLevel and close[1] >= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close < open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        // Initial strength assessment
+                        breakoutStrength = 1
+                        
+                        // Add strength if breakout volume is high or is a spike
+                        if smartVolume > volumeMA * 1.5 or isVolumeSpike
+                            breakoutStrength := breakoutStrength + 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        breakoutStrength := math.min(breakoutStrength + 1, 3)
+                                        break
+                        
+                        // Calculate score
+                        [score, quality] = multiFactorFilterScore("bearish", currentLabel, breakoutStrength, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Sell"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := breakoutStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, breakoutStrength, atrValue)
+                            break
+    
+    // If no signal from daily pivots, check weekly pivots (they take precedence)
+    if signal == "None" and showWeekly and array.size(pivotLevelsWeekly) > 0
+        // FIXED: Added comprehensive bounds checking in weekly pivots loop
+        for i = 0 to array.size(pivotLevelsWeekly) - 1
+            if i >= array.size(pivotLabelsWeekly) or i >= array.size(pivotIsVirginWeekly) or i >= array.size(pivotLevelsWeekly)
+                continue
+                
+            currentLevel = array.get(pivotLevelsWeekly, i)
+            currentLabel = array.get(pivotLabelsWeekly, i)
+            currentVirgin = array.get(pivotIsVirginWeekly, i)
+            
+            // Skip invalid levels
+            if na(currentLevel) or currentLevel <= 0 or na(currentLabel)
+                continue
+            
+            if signal_type == "bounce"
+                // Bullish bounce from weekly support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L")) and 
+                   low <= currentLevel and close > currentLevel and low[1] > currentLevel
+                    
+                    [score, quality] = multiFactorFilterScore("bullish", currentLabel, 2, currentVirgin)
+                    
+                    // Check if score meets minimum threshold
+                    if score >= minSignalScore
+                        signal := "Buy"
+                        level := currentLevel
+                        pivot_type := currentLabel
+                        strength := 2  // Start with higher strength for weekly pivot
+                        is_virgin := currentVirgin
+                        signal_score := score
+                        predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                        break
+                
+                // Bearish bounce from weekly resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H")) and 
+                   high >= currentLevel and close < currentLevel and high[1] < currentLevel
+                    
+                    [score, quality] = multiFactorFilterScore("bearish", currentLabel, 2, currentVirgin)
+                    
+                    // Check if score meets minimum threshold
+                    if score >= minSignalScore
+                        signal := "Sell"
+                        level := currentLevel
+                        pivot_type := currentLabel
+                        strength := 2  // Start with higher strength for weekly pivot
+                        is_virgin := currentVirgin
+                        signal_score := score
+                        predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                        break
+            
+            else if signal_type == "breakout" 
+                // Weekly breakout logic is similar to daily
+                // Bullish breakout above resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H") or currentLabel == "W-PP") and 
+                   close > currentLevel and close[1] <= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close > open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        [score, quality] = multiFactorFilterScore("bullish", currentLabel, 2, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Buy"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := 2
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                            break
+                
+                // Bearish breakout below support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L") or currentLabel == "W-PP") and 
+                   close < currentLevel and close[1] >= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close < open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        [score, quality] = multiFactorFilterScore("bearish", currentLabel, 2, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Sell"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := 2
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                            break
+    
+    // Check for time-based patterns to enhance signal strength
+    if signal != "None" and isTimeBasedPivotTest()
+        strength := math.min(strength + 1, 3)  // Increase strength if at common testing time
+    
+    [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+
+// FIXED: Range-Based Strategy Signals: Detects price consolidation between pivots for iron condor/butterfly setups
+calcRangeSignal() =>
+    // FIXED: Properly initialize return values
+    signal = "None"
+    upperLevel = 0.0
+    lowerLevel = 0.0
+    strength = 0
+    signal_score = 0
+    
+    // FIXED: Skip calculation if not appropriate - early exit optimization
+    // Range strategies work best in low to normal volatility and with enough pivot data
+    if highVolRegime or array.size(pivotLevelsDaily) < 2
+        return [signal, upperLevel, lowerLevel, strength, signal_score]
+    
+    // Quick ADX check - exit early if trending market
+    if adxValue > 30  // Strong trend - not suitable for range strategy
+        return [signal, upperLevel, lowerLevel, strength, signal_score]
+        
+    // Try to find central pivot point
+    centralPivot = 0.0
+    // FIXED: Added proper bounds checking in pivot search loop
+    for i = 0 to array.size(pivotLevelsDaily) - 1
+        if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily) and 
+           array.get(pivotLabelsDaily, i) == "D-PP"
+            centralPivot := array.get(pivotLevelsDaily, i)
+            break
+    
+    // Exit early if no central pivot or price not near central pivot
+    if na(centralPivot) or centralPivot <= 0 or close <= 0 or 
+       close < centralPivot * 0.98 or close > centralPivot * 1.02
+        return [signal, upperLevel, lowerLevel, strength, signal_score]
+    
+    // Find potential resistance level
+    // FIXED: Added proper bounds checking in resistance level search
+    for i = 0 to array.size(pivotLevelsDaily) - 1
+        if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily)
+            currentLabel = array.get(pivotLabelsDaily, i)
+            if str.contains(currentLabel, "R") or str.contains(currentLabel, "H")
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0
+                    upperLevel := level
+                    break
+    
+    // Find potential support level
+    // FIXED: Added proper bounds checking in support level search
+    for i = 0 to array.size(pivotLevelsDaily) - 1
+        if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily)
+            currentLabel = array.get(pivotLabelsDaily, i)
+            if str.contains(currentLabel, "S") or str.contains(currentLabel, "L")
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0
+                    lowerLevel := level
+                    break
+    
+    // If we found valid upper and lower bounds
+    if upperLevel > 0 and lowerLevel > 0
+        // Confirm range-bound behavior with ADX
+        rangeStrength = 0
+        
+        // Check ADX
+        if adxValue < 20  // Low ADX confirms range-bound market
+            rangeStrength := 1
+            
+            // Add strength if volatility is low
+            if lowVolRegime
+                rangeStrength := rangeStrength + 1
+            
+            // Add strength if price has been oscillating between these levels
+            priceOscillating = (high[1] >= upperLevel * 0.95 or high[2] >= upperLevel * 0.95) and
+                              (low[1] <= lowerLevel * 1.05 or low[2] <= lowerLevel * 1.05)
+            if priceOscillating
+                rangeStrength := rangeStrength + 1
+        
+        // Custom score for range setups
+        score = 0
+        
+        // ADX component (0-40 points)
+        adx_score = math.max(0, 40 - adxValue)
+        
+        // Volatility component (0-30 points)
+        vol_score = lowVolRegime ? 30 : normalVolRegime ? 20 : 0
+        
+        // Price location component (0-20 points)
+        central_pivot_distance = math.abs(close - centralPivot) / centralPivot * 100
+        price_score = central_pivot_distance < 0.5 ? 20 : 
+                     central_pivot_distance < 1.0 ? 15 :
+                     central_pivot_distance < 1.5 ? 10 : 5
+        
+        // Oscillation component (0-10 points)
+        osc_score = priceOscillating ? 10 : 0
+        
+        // Volume stability component (0-10 points)
+        vol_stable = not isVolumeSpike ? 10 : 0
+        
+        // Final score
+        range_score = adx_score + vol_score + price_score + osc_score + vol_stable
+        
+        if rangeStrength >= 1 and range_score >= minSignalScore
+            signal := "Range"
+            strength := rangeStrength
+            signal_score := range_score
+    
+    [signal, upperLevel, lowerLevel, strength, signal_score]
+
+// Signal variables for current bar with expanded fields
+var bounceSignal = "None"
+var float bounceLevel = 0.0
+var int bounceStrength = 0
+var string bouncePivotType = ""
+var bool bounceIsVirgin = false
+var int bounceScore = 0
+var float bouncePredictedVol = 0.0
+
+var breakoutSignal = "None"
+var float breakoutLevel = 0.0
+var int breakoutStrength = 0
+var string breakoutPivotType = ""
+var bool breakoutIsVirgin = false
+var int breakoutScore = 0
+var float breakoutPredictedVol = 0.0
+
+var rangeSignal = "None"
+var float rangeUpperLevel = 0.0
+var float rangeLowerLevel = 0.0
+var int rangeStrength = 0
+var int rangeScore = 0
+
+// FIXED: Only calculate signals on confirmed bars to avoid repainting
+if barstate.isconfirmed
+    // Calculate bounce signals
+    if showPivotBounceSignals
+        // FIXED: Added error handling for signal calculation
+        [newBounceSignal, newBounceLevel, newBounceStrength, newBouncePivotType, newBounceIsVirgin, newBounceScore, newBouncePredictedVol] = calcSignal("bounce")
+        if not na(newBounceSignal) and not na(newBounceLevel) and not na(newBounceStrength) and not na(newBouncePivotType) and 
+           not na(newBounceIsVirgin) and not na(newBounceScore) and not na(newBouncePredictedVol)
+            bounceSignal := newBounceSignal
+            bounceLevel := newBounceLevel
+            bounceStrength := newBounceStrength
+            bouncePivotType := newBouncePivotType
+            bounceIsVirgin := newBounceIsVirgin
+            bounceScore := newBounceScore
+            bouncePredictedVol := newBouncePredictedVol
+    
+    // Calculate breakout signals
+    if showPivotBreakoutSignals
+        // FIXED: Added error handling for signal calculation
+        [newBreakoutSignal, newBreakoutLevel, newBreakoutStrength, newBreakoutPivotType, newBreakoutIsVirgin, newBreakoutScore, newBreakoutPredictedVol] = calcSignal("breakout")
+        if not na(newBreakoutSignal) and not na(newBreakoutLevel) and not na(newBreakoutStrength) and not na(newBreakoutPivotType) and 
+           not na(newBreakoutIsVirgin) and not na(newBreakoutScore) and not na(newBreakoutPredictedVol)
+            breakoutSignal := newBreakoutSignal
+            breakoutLevel := newBreakoutLevel
+            breakoutStrength := newBreakoutStrength
+            breakoutPivotType := newBreakoutPivotType
+            breakoutIsVirgin := newBreakoutIsVirgin
+            breakoutScore := newBreakoutScore
+            breakoutPredictedVol := newBreakoutPredictedVol
+    
+    // Calculate range signals
+    if showRangeSignals
+        // FIXED: Added error handling for range signal calculation
+        [newRangeSignal, newRangeUpperLevel, newRangeLowerLevel, newRangeStrength, newRangeScore] = calcRangeSignal()
+        if not na(newRangeSignal) and not na(newRangeUpperLevel) and not na(newRangeLowerLevel) and not na(newRangeStrength) and not na(newRangeScore)
+            rangeSignal := newRangeSignal
+            rangeUpperLevel := newRangeUpperLevel
+            rangeLowerLevel := newRangeLowerLevel
+            rangeStrength := newRangeStrength
+            rangeScore := newRangeScore

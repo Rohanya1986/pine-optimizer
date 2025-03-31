@@ -1,0 +1,74 @@
+//==================================================================================================
+// SECTION 2: VOLATILITY ANALYSIS AND REGIME CLASSIFICATION
+//==================================================================================================
+
+// Calculate ATR for volatility estimation with proper error handling
+atrPeriod = 14
+atrValue = ta.atr(atrPeriod)
+atrPercent = close > 0 ? (atrValue / close) * 100 : 0  // FIXED: Prevent division by zero
+
+// Define volatility regimes
+lowVolRegime = atrPercent < 0.8
+normalVolRegime = atrPercent >= 0.8 and atrPercent <= 1.5
+highVolRegime = atrPercent > 1.5
+extremeVolRegime = atrPercent > 2.5
+
+// Get current volatility regime as string
+volRegime = extremeVolRegime ? "EXTREME" : highVolRegime ? "HIGH" : lowVolRegime ? "LOW" : "NORMAL"
+
+// Get trend strength using ADX
+adxLen = 14
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
+trendStrength = adxValue
+isTrending = adxValue > 25
+trendDirection = diPlus > diMinus ? "up" : "down"
+
+// Calculate volatility-adjusted parameters
+adaptedZoneWidth = pivotZoneWidth
+adaptedVolumeThreshold = volumeThreshold
+adaptedProfitTarget = profitTargetPercent
+adaptedStopLossMultiplier = atrStopMultiplier
+adaptedPositionSize = 1.0
+adaptedDte = daysToExpiry
+
+// FIXED: Added barstate.isconfirmed check to avoid recalculating parameters on every bar
+if barstate.isconfirmed and adaptPositionToVolatility
+    if extremeVolRegime
+        adaptedZoneWidth := 0.4
+        adaptedVolumeThreshold := 2.0
+        adaptedProfitTarget := math.min(profitTargetPercent + 30, 90)
+        adaptedStopLossMultiplier := math.min(atrStopMultiplier + 0.5, 3.0)
+        adaptedPositionSize := 0.5
+        adaptedDte := adaptDteToVolatility ? math.max(daysToExpiry - 8, 5) : daysToExpiry
+    else if highVolRegime
+        adaptedZoneWidth := 0.35
+        adaptedVolumeThreshold := 1.8
+        adaptedProfitTarget := math.min(profitTargetPercent + 20, 90)
+        adaptedStopLossMultiplier := math.min(atrStopMultiplier + 0.3, 3.0)
+        adaptedPositionSize := 0.7
+        adaptedDte := adaptDteToVolatility ? math.max(daysToExpiry - 5, 7) : daysToExpiry
+    else if lowVolRegime
+        adaptedZoneWidth := 0.18
+        adaptedVolumeThreshold := 1.3
+        adaptedProfitTarget := math.max(profitTargetPercent - 15, 30)
+        adaptedStopLossMultiplier := math.max(atrStopMultiplier - 0.2, 0.5)
+        adaptedPositionSize := 1.2
+        adaptedDte := adaptDteToVolatility ? math.min(daysToExpiry + 10, 30) : daysToExpiry
+
+// FIXED: Added var to calculate this just once per bar
+var string autoSelectedPivotMethod = pivotType
+
+// FIXED: Added barstate.isconfirmed check for auto-selection
+if barstate.isconfirmed and enableAutoMethodSelection
+    if lowVolRegime
+        autoSelectedPivotMethod := "Camarilla"  // Best in low volatility
+    else if highVolRegime
+        autoSelectedPivotMethod := "Woodie"     // Better in high volatility due to close weighting
+    else if isTrending            // ADX > 25 indicates trend
+        autoSelectedPivotMethod := "Fibonacci"  // Better for trending markets
+    else
+        autoSelectedPivotMethod := "Standard"   // Solid all-around performer
+
+// Use auto-selected or manually selected pivot method
+activePivotMethod = enableAutoMethodSelection ? autoSelectedPivotMethod : pivotType
+

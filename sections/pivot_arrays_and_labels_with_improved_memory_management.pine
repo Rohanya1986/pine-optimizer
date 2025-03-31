@@ -1,0 +1,105 @@
+//==================================================================================================
+// SECTION 6: PIVOT ARRAYS AND LABELS WITH IMPROVED MEMORY MANAGEMENT
+//==================================================================================================
+
+// FIXED: Initialize arrays to store pivot levels, labels, and status - reusing arrays
+var float[] pivotLevelsDaily = array.new_float(0)
+var string[] pivotLabelsDaily = array.new_string(0)
+var bool[] pivotIsVirginDaily = array.new_bool(0)
+
+var float[] pivotLevelsWeekly = array.new_float(0)
+var string[] pivotLabelsWeekly = array.new_string(0)
+var bool[] pivotIsVirginWeekly = array.new_bool(0)
+
+var float[] pivotLevelsMonthly = array.new_float(0)
+var string[] pivotLabelsMonthly = array.new_string(0)
+var bool[] pivotIsVirginMonthly = array.new_bool(0)
+
+// FIXED: Cache standard label arrays to avoid recreating them
+var string[] standardLabels = array.from("PP", "R1", "R2", "R3", "S1", "S2", "S3")
+var string[] camarillaLabels = array.from("PP", "H1", "H2", "H3", "H4", "L1", "L2", "L3", "L4")
+var string[] fibonacciLabels = array.from("PP", "R1", "R2", "R3", "S1", "S2", "S3")
+var string[] woodieLabels = array.from("PP", "R1", "R2", "R3", "S1", "S2", "S3")
+
+// FIXED: Initialize pivot labels based on method - now reuses cached arrays
+getDefaultLabels(method) =>
+    string[] result = standardLabels
+    if method == "Camarilla"
+        result := camarillaLabels
+    else if method == "Fibonacci"
+        result := fibonacciLabels
+    else if method == "Woodie"
+        result := woodieLabels
+    else // Standard
+        result := standardLabels
+    result
+
+// FIXED: Generate pivot labels with timeframe prefix - improved bounds checking
+getPivotLabelsWithPrefix(method, prefix) =>
+    string[] baseLabels = getDefaultLabels(method)
+    string[] result = array.new_string(array.size(baseLabels))
+    
+    // FIXED: Added bounds check in loop
+    for i = 0 to array.size(baseLabels) - 1
+        if i < array.size(result)
+            array.set(result, i, prefix + "-" + array.get(baseLabels, i))
+    
+    result
+
+// FIXED: Update arrays for current bar with proper array reuse to reduce memory allocations
+updatePivotArrays() =>
+    // FIXED: Clear existing arrays rather than creating new ones
+    array.clear(pivotLevelsDaily)
+    array.clear(pivotLabelsDaily)
+    array.clear(pivotIsVirginDaily)
+    
+    array.clear(pivotLevelsWeekly)
+    array.clear(pivotLabelsWeekly)
+    array.clear(pivotIsVirginWeekly)
+    
+    array.clear(pivotLevelsMonthly)
+    array.clear(pivotLabelsMonthly)
+    array.clear(pivotIsVirginMonthly)
+    
+    // Create labels
+    string[] dailyLabels = getPivotLabelsWithPrefix(activePivotMethod, "D")
+    string[] weeklyLabels = getPivotLabelsWithPrefix(activePivotMethod, "W")
+    string[] monthlyLabels = getPivotLabelsWithPrefix(activePivotMethod, "M")
+    
+    // Populate daily pivots
+    if showDaily and array.size(dailyPivotsCache) > 0
+        // FIXED: Added proper bound checking in loop
+        for i = 0 to math.min(array.size(dailyPivotsCache), array.size(dailyLabels)) - 1
+            if i < array.size(dailyPivotsCache) and i < array.size(dailyLabels)
+                level = array.get(dailyPivotsCache, i)
+                if not na(level) and level > 0
+                    array.push(pivotLevelsDaily, level)
+                    array.push(pivotLabelsDaily, array.get(dailyLabels, i))
+                    array.push(pivotIsVirginDaily, isPivotVirgin(level, virginPivotLookback))
+
+    // Populate weekly pivots
+    if showWeekly and array.size(weeklyPivotsCache) > 0
+        // FIXED: Added proper bound checking in loop
+        for i = 0 to math.min(array.size(weeklyPivotsCache), array.size(weeklyLabels)) - 1
+            if i < array.size(weeklyPivotsCache) and i < array.size(weeklyLabels)
+                level = array.get(weeklyPivotsCache, i)
+                if not na(level) and level > 0
+                    array.push(pivotLevelsWeekly, level)
+                    array.push(pivotLabelsWeekly, array.get(weeklyLabels, i))
+                    array.push(pivotIsVirginWeekly, isPivotVirgin(level, virginPivotLookback * 5))  // Longer lookback for weekly
+
+    // Populate monthly pivots
+    if showMonthly and array.size(monthlyPivotsCache) > 0
+        // FIXED: Added proper bound checking in loop
+        for i = 0 to math.min(array.size(monthlyPivotsCache), array.size(monthlyLabels)) - 1
+            if i < array.size(monthlyPivotsCache) and i < array.size(monthlyLabels)
+                level = array.get(monthlyPivotsCache, i)
+                if not na(level) and level > 0
+                    array.push(pivotLevelsMonthly, level)
+                    array.push(pivotLabelsMonthly, array.get(monthlyLabels, i))
+                    array.push(pivotIsVirginMonthly, isPivotVirgin(level, virginPivotLookback * 20))  // Much longer lookback for monthly
+
+// FIXED: Update pivot arrays on bar confirmation only
+if barstate.isconfirmed
+    updatePivotArrays()
+

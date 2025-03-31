@@ -1,0 +1,98 @@
+//==================================================================================================
+// SECTION 5: MULTI-TIMEFRAME DATA WITH OPTIMIZATIONS
+//==================================================================================================
+
+// FIXED: Get High, Low, Close values for different timeframes using optimized request function
+// Combines requests to reduce server load
+requestMultiTimeframeData() =>
+    // FIXED: Properly initialized default arrays
+    float[] monthlyData = array.new_float(3, na)
+    float[] weeklyData = array.new_float(3, na)
+    float[] dailyData = array.new_float(3, na)
+    
+    // Monthly data - only calculate if enabled
+    if showMonthly
+        // FIXED: Use array notation for clarity and to prevent repainting
+        tempMonthly = request.security(syminfo.tickerid, "M", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+        monthlyData := tempMonthly
+
+    // Weekly data - only calculate if enabled
+    if showWeekly
+        tempWeekly = request.security(syminfo.tickerid, "W", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+        weeklyData := tempWeekly
+    
+    // Daily data - always needed
+    tempDaily = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+    dailyData := tempDaily
+    
+    // FIXED: Safer array access with explicit indices
+    [array.get(dailyData, 0), array.get(dailyData, 1), array.get(dailyData, 2),
+     array.get(weeklyData, 0), array.get(weeklyData, 1), array.get(weeklyData, 2),
+     array.get(monthlyData, 0), array.get(monthlyData, 1), array.get(monthlyData, 2)]
+
+// Get all timeframe data efficiently with a single function call
+[dailyHigh, dailyLow, dailyClose, 
+ weeklyHigh, weeklyLow, weeklyClose,
+ monthlyHigh, monthlyLow, monthlyClose] = requestMultiTimeframeData()
+
+// FIXED: Cache pivot calculations to avoid recalculating every bar
+// Properly initialized arrays
+var float[] dailyPivotsCache = array.new_float(0)
+var float[] weeklyPivotsCache = array.new_float(0)
+var float[] monthlyPivotsCache = array.new_float(0)
+
+// FIXED: Function to determine if a pivot is "virgin" (never tested before) - optimized version
+isPivotVirgin(pivotLevel, lookbackBars) =>
+    // FIXED: Added comprehensive error checking
+    if na(pivotLevel) or pivotLevel <= 0 or lookbackBars <= 0
+        false
+    else
+        // FIXED: Quick check - find highest high and lowest low to avoid unnecessary processing
+        maxHigh = ta.highest(high, lookbackBars)
+        minLow = ta.lowest(low, lookbackBars)
+        
+        // If pivot is outside range of recent price action, it's virgin
+        if na(maxHigh) or na(minLow)
+            true  // Safer to assume it's virgin if we can't determine
+        else if pivotLevel > maxHigh or pivotLevel < minLow
+            true
+        else
+            // Only check individual bars if necessary
+            wasTestedBefore = false
+            // FIXED: Use math.min to avoid checking more bars than are available
+            actualLookback = math.min(lookbackBars, bar_index)
+            for i = 1 to actualLookback
+                // Check if price has tested this level before
+                if high[i] >= pivotLevel and low[i] <= pivotLevel
+                    wasTestedBefore := true
+                    break
+            not wasTestedBefore
+
+// FIXED: Update pivot caches on bar confirmation only (performance optimization)
+if barstate.isconfirmed
+    // Check if method has changed since last calculation
+    var string lastMethod = ""
+    needsRecalculation = lastMethod != activePivotMethod
+    lastMethod := activePivotMethod
+    
+    // Daily pivots - always update on confirmed bars
+    if needsRecalculation or array.size(dailyPivotsCache) == 0
+        // FIXED: Added null check before setting
+        newDailyPivots = getPivots(dailyHigh, dailyLow, dailyClose, activePivotMethod)
+        if array.size(newDailyPivots) > 0
+            dailyPivotsCache := newDailyPivots
+    
+    // Weekly pivots
+    if showWeekly and (needsRecalculation or array.size(weeklyPivotsCache) == 0)
+        // FIXED: Added null check before setting
+        newWeeklyPivots = getPivots(weeklyHigh, weeklyLow, weeklyClose, activePivotMethod)
+        if array.size(newWeeklyPivots) > 0
+            weeklyPivotsCache := newWeeklyPivots
+    
+    // Monthly pivots
+    if showMonthly and (needsRecalculation or array.size(monthlyPivotsCache) == 0)
+        // FIXED: Added null check before setting
+        newMonthlyPivots = getPivots(monthlyHigh, monthlyLow, monthlyClose, activePivotMethod)
+        if array.size(newMonthlyPivots) > 0
+            monthlyPivotsCache := newMonthlyPivots
+

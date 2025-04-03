@@ -96,8 +96,10 @@ daysToExpiry = input.int(15, "Default Days to Expiry", minval=7, maxval=45, step
 adaptDteToVolatility = input.bool(true, "Adapt DTE to Volatility", tooltip="Adjust days to expiry based on volatility regime", group=section6)
 profitTargetPercent = input.int(60, "Profit Target Percentage", minval=30, maxval=90, step=5, tooltip="Target percentage of maximum profit for options trades", group=section6)
 useFixedStopLoss = input.bool(false, "Use Fixed Stop Loss", tooltip="Use a fixed percentage stop loss instead of ATR-based", group=section6)
-fixedStopLossPercent = input.float(30, "Fixed Stop Loss Percentage", minval=10, maxval=50, step=5, tooltip="Fixed stop loss as percentage of option premium", group=section6)
-atrStopMultiplier = input.float(1.2, "ATR Stop Multiplier", minval=0.5, maxval=3.0, step=0.1, tooltip="Multiplier for ATR-based stop loss", group=section6)
+fixedStopLossPercent = input.float(30, "Fixed Stop Loss Percentage", minval=10, maxval=50, step=5, tooltip="Fixed stop loss as percentage of the underlying index level", group=section6) // Corrected tooltip
+atrStopMultiplier = input.float(1.2, "ATR Stop Multiplier", minval=0.5, maxval=3.0, step=0.1, tooltip="Multiplier for ATR-based initial stop loss", group=section6)
+enableTrailingStop = input.bool(true, "Enable Trailing Stop", tooltip="Enable ATR-based trailing stop loss", group=section6)
+trailingStopAtrMultiplier = input.float(2.0, "Trailing Stop ATR Multiplier", minval=1.0, maxval=5.0, step=0.1, tooltip="Multiplier for ATR-based trailing stop loss", group=section6)
 
 // Alert Parameters
 var section7 = "Alerts"
@@ -1465,28 +1467,39 @@ getAdvancedOptionStrategy(signal_type, vol_regime, strength, is_virgin, predicte
         else
             "None"
 
-// FIXED: Calculate stop loss level based on pivot level and ATR
-getStopLoss(signal_type, pivot_level, atr_value) =>
+// FIXED: Calculate stop loss level based on signal type, reference level, and ATR
+// For bounces, reference is pivot_level. For breakouts, reference is breakout bar low/high.
+getStopLoss(signal_type, signal_origin, reference_level, atr_value) =>
     // FIXED: Added comprehensive error handling
-    if na(signal_type) or (signal_type != "Buy" and signal_type != "Sell") or na(pivot_level) or pivot_level <= 0
+    if na(signal_type) or (signal_type != "Buy" and signal_type != "Sell") or na(signal_origin) or na(reference_level) or reference_level <= 0
         0.0  // Return default on error
     else
         float result = 0.0
-        
+        float safe_atr = na(atr_value) or atr_value <= 0 ? ta.atr(14) : atr_value // Ensure valid ATR
+
         if useFixedStopLoss
+            // Fixed stop based on the reference level (pivot for bounce, entry for breakout)
             if signal_type == "Buy"
-                result := pivot_level * (1 - fixedStopLossPercent / 100)
+                result := reference_level * (1 - fixedStopLossPercent / 100)
             else if signal_type == "Sell"
-                result := pivot_level * (1 + fixedStopLossPercent / 100)
+                result := reference_level * (1 + fixedStopLossPercent / 100)
         else
-            // FIXED: Check for valid ATR value
-            float safe_atr = na(atr_value) or atr_value <= 0 ? ta.atr(14) : atr_value
-            
-            if signal_type == "Buy"
-                result := pivot_level - (safe_atr * adaptedStopLossMultiplier)
-            else if signal_type == "Sell"
-                result := pivot_level + (safe_atr * adaptedStopLossMultiplier)
-        
+            // ATR-based stop
+            if signal_origin == "bounce"
+                // For bounces, place stop beyond the pivot level
+                if signal_type == "Buy"
+                    result := reference_level - (safe_atr * adaptedStopLossMultiplier)
+                else if signal_type == "Sell"
+                    result := reference_level + (safe_atr * adaptedStopLossMultiplier)
+            else // signal_origin == "breakout"
+                // For breakouts, place stop beyond the breakout bar's low/high
+                if signal_type == "Buy"
+                    // Stop below the low of the breakout bar + ATR buffer
+                    result := low - (safe_atr * adaptedStopLossMultiplier)
+                else if signal_type == "Sell"
+                    // Stop above the high of the breakout bar + ATR buffer
+                    result := high + (safe_atr * adaptedStopLossMultiplier)
+
         result
 
 // FIXED: Find the next pivot level in the direction of the trade for target calculation
@@ -2019,111 +2032,120 @@ createOptionIndicatorsTable() =>
         vol_color = isVolumeSpike ? color.green : color.white
         table.cell(optionsTable, 1, 6, vol_status, text_color=vol_color)
 
-// FIXED: Create a table showing strategy signals and recommendations
+// FIXED: Create a table showing strategy signals and recommendations (Expanded)
 createStrategySignalsTable() =>
     // Create a table in the top left corner
-    strategyTable = table.new(position.top_left, 3, 9, frame_color=color.gray, frame_width=1, border_width=1)
+    strategyTable = table.new(position.top_left, 3, 14, frame_color=color.gray, frame_width=1, border_width=1) // Increased rows
     array.push(tables, strategyTable)
-    
+
     // Set up headers
-    table.cell(strategyTable, 0, 0, "Strategy Signals", bgcolor=color.gray, text_color=color.white)
-    table.cell(strategyTable, 1, 0, "Details", bgcolor=color.gray, text_color=color.white)
-    table.cell(strategyTable, 2, 0, "Recommendation", bgcolor=color.gray, text_color=color.white)
-    
-    // Pivot Bounce Strategy
+    table.cell(strategyTable, 0, 0, "Strategy Signals", bgcolor=color.gray, text_color=color.white, width=15)
+    table.cell(strategyTable, 1, 0, "Details", bgcolor=color.gray, text_color=color.white, width=30)
+    table.cell(strategyTable, 2, 0, "Recommendation / Risk", bgcolor=color.gray, text_color=color.white, width=35)
+    // --- Row 1: Pivot Bounce ---
     table.cell(strategyTable, 0, 1, "Pivot Bounce", text_color=color.white)
     bounce_color = bounceSignal == "Buy" ? color.green : bounceSignal == "Sell" ? color.red : color.white
-    bounce_text = bounceSignal == "None" ? "None" : 
-                 bounceSignal + " at " + str.tostring(bounceLevel) + " (" + str.tostring(bounceStrength) + "★)"
+    bounce_text = bounceSignal == "None" ? "None" :
+                 bounceSignal + " at " + str.tostring(bounceLevel, "#.##") + " (" + str.tostring(bounceStrength) + "★)"
     table.cell(strategyTable, 1, 1, bounce_text, text_color=bounce_color)
-    
-    // Pivot Breakout Strategy
+
+    // --- Row 2: Pivot Breakout ---
     table.cell(strategyTable, 0, 2, "Pivot Breakout", text_color=color.white)
     breakout_color = breakoutSignal == "Buy" ? color.green : breakoutSignal == "Sell" ? color.red : color.white
-    breakout_text = breakoutSignal == "None" ? "None" : 
-                   breakoutSignal + " at " + str.tostring(breakoutLevel) + " (" + str.tostring(breakoutStrength) + "★)"
+    breakout_text = breakoutSignal == "None" ? "None" :
+                   breakoutSignal + " at " + str.tostring(breakoutLevel, "#.##") + " (" + str.tostring(breakoutStrength) + "★)"
     table.cell(strategyTable, 1, 2, breakout_text, text_color=breakout_color)
-    
-    // Range Strategy
+
+    // --- Row 3: Range Signal ---
     table.cell(strategyTable, 0, 3, "Range Signal", text_color=color.white)
-    range_text = rangeSignal == "Range" ? 
-                "Between " + str.tostring(rangeLowerLevel) + " and " + str.tostring(rangeUpperLevel) + 
+    range_text = rangeSignal == "Range" ?
+                "Between " + str.tostring(rangeLowerLevel, "#.##") + " and " + str.tostring(rangeUpperLevel, "#.##") +
                 " (" + str.tostring(rangeStrength) + "★)" : "None"
     table.cell(strategyTable, 1, 3, range_text, text_color=color.blue)
-    
-    // Determine primary signal for strategy recommendation
-    primary_signal = bounceSignal != "None" ? bounceSignal : 
-                    breakoutSignal != "None" ? breakoutSignal : rangeSignal
-    signal_strength = bounceSignal != "None" ? bounceStrength : 
-                     breakoutSignal != "None" ? breakoutStrength : rangeStrength
-    pivot_level = bounceSignal != "None" ? bounceLevel : 
-                 breakoutSignal != "None" ? breakoutLevel : 0.0
-    is_virgin = bounceSignal != "None" ? bounceIsVirgin : 
-                breakoutSignal != "None" ? breakoutIsVirgin : false
-    predicted_vol = bounceSignal != "None" ? bouncePredictedVol : 
-                   breakoutSignal != "None" ? breakoutPredictedVol : atrValue
-    
-    // Get target and distance information
+
+    // --- Determine Primary Signal & Calculate Risk Metrics ---
+    primary_signal = "None"
+    signal_origin = "None" // "bounce" or "breakout"
+    signal_strength = 0
+    reference_level = 0.0 // Pivot for bounce, entry for breakout
+    is_virgin = false
+    predicted_vol = na(atrValue) ? 0.0 : atrValue
+    entry_price = close // Assume entry at current close for calculation
+
+    if bounceSignal != "None"
+        primary_signal := bounceSignal
+        signal_origin := "bounce"
+        signal_strength := bounceStrength
+        reference_level := bounceLevel
+        is_virgin := bounceIsVirgin
+        predicted_vol := bouncePredictedVol
+    else if breakoutSignal != "None"
+        primary_signal := breakoutSignal
+        signal_origin := "breakout"
+        signal_strength := breakoutStrength
+        reference_level := entry_price // Use entry price as reference for breakout stop % calc
+        is_virgin := breakoutIsVirgin
+        predicted_vol := breakoutPredictedVol
+    else if rangeSignal != "None"
+        primary_signal := rangeSignal
+        signal_origin := "range"
+        signal_strength := rangeStrength
+        reference_level := (rangeUpperLevel + rangeLowerLevel) / 2
+
+    // Get target and stop levels
     float target_level = 0.0
     float distance_to_target = 0.0
-    
+    float stop_level = 0.0
+    float risk_per_point = 0.0
+    int position_size = 0
+    float risk_amount_trade = 0.0
+    float risk_percent_trade = 0.0
+    float potential_profit = 0.0
+    float risk_reward = 0.0
+
     if primary_signal == "Buy" or primary_signal == "Sell"
-        [targetLevel, distanceToTarget] = getNextPivot(primary_signal, close)
+        [targetLevel, distanceToTarget] = getNextPivot(primary_signal, entry_price)
         target_level := targetLevel
         distance_to_target := distanceToTarget
-    
-    // Options Strategy Recommendation
-    optimal_dte = getOptimalDTE(primary_signal != "None" ? primary_signal : "None", volRegime, is_virgin)
+        stop_level := getStopLoss(primary_signal, signal_origin, reference_level, atrValue) // Use correct reference level
+        if stop_level > 0
+            risk_per_point := math.abs(entry_price - stop_level)
+            position_size := calculatePositionSize(primary_signal, entry_price, stop_level, signal_strength, is_virgin)
+            if position_size > 0 and lotSize > 0 and accountSize > 0
+                risk_amount_trade := risk_per_point * position_size * lotSize
+                risk_percent_trade := (risk_amount_trade / accountSize) * 100
+                potential_profit := distance_to_target * position_size * lotSize
+                if risk_amount_trade > 0
+                    risk_reward := potential_profit / risk_amount_trade
+
+    // --- Row 4: Options Strategy ---
+    optimal_dte = getOptimalDTE(primary_signal, volRegime, is_virgin)
     strategy_rec = getAdvancedOptionStrategy(primary_signal, volRegime, signal_strength, is_virgin, predicted_vol, optimal_dte, distance_to_target)
-    
     table.cell(strategyTable, 0, 4, "Options Strategy", text_color=color.white)
     table.cell(strategyTable, 1, 4, strategy_rec, text_color=color.white)
-    
-    // Determine recommended stop loss and target
-    float stop_level = 0.0
-    
-    if primary_signal == "Buy" or primary_signal == "Sell"
-        stop_level := getStopLoss(primary_signal, pivot_level, atrValue)
-    
-    // Position Size Recommendation
+
+    // --- Row 5: Position Size ---
     table.cell(strategyTable, 0, 5, "Position Size", text_color=color.white)
-    
-    int position_size = 0
-    if primary_signal == "Buy" or primary_signal == "Sell"
-        position_size := calculatePositionSize(primary_signal, close, stop_level, signal_strength, is_virgin)
-    
-    position_size_text = position_size > 0 ? 
-                        str.tostring(position_size) + " lots" : 
-                        "N/A"
+    position_size_text = position_size > 0 ? str.tostring(position_size) + " lots" : "N/A"
     table.cell(strategyTable, 1, 5, position_size_text, text_color=color.white)
-    
-    // Risk-Reward Ratio
+
+    // --- Row 6: Risk:Reward ---
     table.cell(strategyTable, 0, 6, "Risk:Reward", text_color=color.white)
-    
-    float risk_reward = 0.0
-    if primary_signal == "Buy" or primary_signal == "Sell" and stop_level > 0 and target_level > 0
-        risk = math.abs(close - stop_level)
-        reward = math.abs(target_level - close)
-        if risk > 0
-            risk_reward := reward / risk
-    
     rr_text = risk_reward > 0 ? str.tostring(risk_reward, "#.##") : "N/A"
     rr_color = risk_reward >= 2.0 ? color.green : risk_reward >= 1.5 ? color.orange : risk_reward > 0 ? color.red : color.white
     table.cell(strategyTable, 1, 6, rr_text, text_color=rr_color)
-    
-    // Optimal DTE
+
+    // --- Row 7: Recommended DTE ---
     table.cell(strategyTable, 0, 7, "Recommended DTE", text_color=color.white)
     dte_text = optimal_dte > 0 ? str.tostring(optimal_dte) + " days" : "N/A"
     table.cell(strategyTable, 1, 7, dte_text, text_color=color.white)
-    
-    // Strike Selection
+
+    // --- Row 8: Strike Selection ---
     table.cell(strategyTable, 0, 8, "Strike Selection", text_color=color.white)
-    
     strikes_text = "N/A"
     if strategy_rec != "None" and (primary_signal == "Buy" or primary_signal == "Sell" or primary_signal == "Range")
-        strikes = getStrikes(strategy_rec, close, target_level, stop_level)
-        
-        // FIXED: Added proper bounds checking on strikes array
+        strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+        // ... (strike text generation logic remains the same) ...
         if strategy_rec == "Long Call" or strategy_rec == "Long Put"
             if array.size(strikes) > 0
                 strikes_text := array.get(strikes, 0)
@@ -2135,134 +2157,118 @@ createStrategySignalsTable() =>
                 strikes_text := array.get(strikes, 1)
         else if strategy_rec == "Iron Condor" or strategy_rec == "Iron Butterfly"
             if array.size(strikes) > 3
-                strikes_text := array.get(strikes, 3) + "/" + array.get(strikes, 2) + " - " + 
+                strikes_text := array.get(strikes, 3) + "/" + array.get(strikes, 2) + " - " +
                                array.get(strikes, 1) + "/" + array.get(strikes, 0)
-    
     table.cell(strategyTable, 1, 8, strikes_text, text_color=color.white)
-    
-    // Add Trade Recommendation
+
+    // --- Row 9: Stop Loss Level ---
+    table.cell(strategyTable, 0, 9, "Stop Level (Price)", text_color=color.white)
+    stop_text = stop_level > 0 ? str.tostring(stop_level, "#.##") : "N/A"
+    table.cell(strategyTable, 1, 9, stop_text, text_color=color.red)
+
+    // --- Row 10: Target Level ---
+    table.cell(strategyTable, 0, 10, "Target Level (Price)", text_color=color.white)
+    target_text = target_level > 0 ? str.tostring(target_level, "#.##") : "N/A"
+    table.cell(strategyTable, 1, 10, target_text, text_color=color.green)
+
+    // --- Row 11: Risk per Trade (INR) ---
+    table.cell(strategyTable, 0, 11, "Risk per Trade (INR)", text_color=color.white)
+    risk_amount_text = risk_amount_trade > 0 ? str.tostring(risk_amount_trade, "#.##") : "N/A"
+    table.cell(strategyTable, 1, 11, risk_amount_text, text_color=color.red)
+
+    // --- Row 12: Risk per Trade (%) ---
+    table.cell(strategyTable, 0, 12, "Risk per Trade (%)", text_color=color.white)
+    risk_percent_text = risk_percent_trade > 0 ? str.tostring(risk_percent_trade, "#.##") + "%" : "N/A"
+    table.cell(strategyTable, 1, 12, risk_percent_text, text_color=color.red)
+
+    // --- Row 13: ATR Value ---
+    table.cell(strategyTable, 0, 13, "Current ATR", text_color=color.white)
+    atr_text = na(atrValue) ? "N/A" : str.tostring(atrValue, "#.##")
+    table.cell(strategyTable, 1, 13, atr_text, text_color=color.white)
+
+
+    // --- Column 3: Recommendations / Detailed Risk ---
     if primary_signal != "None"
+        // Trade Recommendation (Entry/Target/Stop)
         if primary_signal == "Buy" or primary_signal == "Sell"
-            rec = "Strategy: " + strategy_rec + "\n"
-            rec := rec + "Entry: " + primary_signal + " at " + str.tostring(close) + "\n"
-            rec := rec + "Target: " + str.tostring(target_level) + "\n"
-            rec := rec + "Stop: " + str.tostring(stop_level) + "\n"
-            rec := rec + "Position: " + position_size_text
-            
+            rec = "Signal: " + primary_signal + " (" + signal_origin + ")\n" +
+                  "Entry: ~" + str.tostring(entry_price, "#.##") + "\n" +
+                  "Target: " + target_text + "\n" +
+                  "Stop: " + stop_text + "\n" +
+                  "Position: " + position_size_text
             signal_color = primary_signal == "Buy" ? color.green : color.red
-            table.cell(strategyTable, 2, 1, rec, text_color=signal_color)
+            table.cell(strategyTable, 2, 1, rec, text_color=signal_color, halign=text.align_left) // Align left
+
+        // Range Recommendation
         else if primary_signal == "Range"
-            rec = "Strategy: " + strategy_rec + "\n"
-            rec := rec + "Upper Boundary: " + str.tostring(rangeUpperLevel) + "\n"
-            rec := rec + "Lower Boundary: " + str.tostring(rangeLowerLevel) + "\n"
-            rec := rec + "Setup Strength: " + str.tostring(rangeStrength) + "★"
-            
-            table.cell(strategyTable, 2, 3, rec, text_color=color.blue)
-        
+            rec = "Strategy: " + strategy_rec + "\n" +
+                  "Upper Boundary: " + str.tostring(rangeUpperLevel, "#.##") + "\n" +
+                  "Lower Boundary: " + str.tostring(rangeLowerLevel, "#.##") + "\n" +
+                  "Setup Strength: " + str.tostring(rangeStrength) + "★"
+            table.cell(strategyTable, 2, 3, rec, text_color=color.blue, halign=text.align_left) // Align left
+
         // Option Structure Recommendation
+        options_rec = "N/A"
         if strategy_rec == "Bull Call Spread"
-            // FIXED: Added proper bounds checking on strikes array
-            strikes = getStrikes(strategy_rec, close, target_level, stop_level)
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
             if array.size(strikes) > 1
                 bull_call_long = array.get(strikes, 0)
                 bull_call_short = array.get(strikes, 1)
-                
                 if bull_call_long != "" and bull_call_short != ""
-                    long_val = str.tonumber(bull_call_long)
-                    short_val = str.tonumber(bull_call_short)
-                    
-                    if not na(long_val) and not na(short_val)
-                        max_risk = position_size * lotSize * math.abs(short_val - long_val)
-                        
-                        options_rec = "Buy " + bull_call_long + " Call\n" +
-                                     "Sell " + bull_call_short + " Call\n" +
-                                     "DTE: " + str.tostring(optimal_dte) + " days\n" +
-                                     "Max Risk: " + str.tostring(max_risk)
-                        
-                        table.cell(strategyTable, 2, 4, options_rec, text_color=color.white)
-        
+                    options_rec = "Buy " + bull_call_long + " Call\n" +
+                                  "Sell " + bull_call_short + " Call\n" +
+                                  "DTE: " + dte_text
         else if strategy_rec == "Bear Put Spread"
-            // FIXED: Added proper bounds checking on strikes array
-            strikes = getStrikes(strategy_rec, close, target_level, stop_level)
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
             if array.size(strikes) > 1
                 bear_put_long = array.get(strikes, 0)
                 bear_put_short = array.get(strikes, 1)
-                
                 if bear_put_long != "" and bear_put_short != ""
-                    long_val = str.tonumber(bear_put_long)
-                    short_val = str.tonumber(bear_put_short)
-                    
-                    if not na(long_val) and not na(short_val)
-                        max_risk = position_size * lotSize * math.abs(long_val - short_val)
-                        
-                        options_rec = "Buy " + bear_put_long + " Put\n" +
-                                     "Sell " + bear_put_short + " Put\n" +
-                                     "DTE: " + str.tostring(optimal_dte) + " days\n" +
-                                     "Max Risk: " + str.tostring(max_risk)
-                        
-                        table.cell(strategyTable, 2, 4, options_rec, text_color=color.white)
-        
+                    options_rec = "Buy " + bear_put_long + " Put\n" +
+                                  "Sell " + bear_put_short + " Put\n" +
+                                  "DTE: " + dte_text
         else if strategy_rec == "Long Call" or strategy_rec == "Long Put"
-            // FIXED: Added proper bounds checking on strikes array
-            strikes = getStrikes(strategy_rec, close, target_level, stop_level)
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
             if array.size(strikes) > 0
                 long_option_strike = array.get(strikes, 0)
-                
                 if long_option_strike != ""
-                    options_rec = "Buy " + long_option_strike + 
-                                 " " + (strategy_rec == "Long Call" ? "Call" : "Put") + "\n" +
-                                 "DTE: " + str.tostring(optimal_dte) + " days\n" +
-                                 "Profit Target: Next pivot at " + str.tostring(target_level) + "\n" +
-                                 "Stop Loss: " + (useFixedStopLoss ? 
-                                               str.tostring(fixedStopLossPercent) + "% of premium" : 
-                                               "Price at " + str.tostring(stop_level))
-                    
-                    table.cell(strategyTable, 2, 4, options_rec, text_color=color.white)
-        
+                    options_rec = "Buy " + long_option_strike + " " + (strategy_rec == "Long Call" ? "Call" : "Put") + "\n" +
+                                  "DTE: " + dte_text
         else if strategy_rec == "Cash-Secured Put"
-            // FIXED: Added proper bounds checking on strikes array
-            strikes = getStrikes(strategy_rec, close, target_level, stop_level)
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
             if array.size(strikes) > 1
                 csp_strike = array.get(strikes, 1)
-                
                 if csp_strike != ""
                     options_rec = "Sell " + csp_strike + " Put\n" +
-                                 "DTE: " + str.tostring(optimal_dte) + " days\n" +
-                                 "Profit Target: " + str.tostring(adaptedProfitTarget) + "% of premium\n" +
-                                 "Exit if price falls below " + str.tostring(stop_level)
-                    
-                    table.cell(strategyTable, 2, 4, options_rec, text_color=color.white)
-        
+                                  "DTE: " + dte_text
         else if strategy_rec == "Covered Call"
-            // FIXED: Added proper bounds checking on strikes array
-            strikes = getStrikes(strategy_rec, close, target_level, stop_level)
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
             if array.size(strikes) > 1
                 cc_strike = array.get(strikes, 1)
-                
                 if cc_strike != ""
                     options_rec = "Sell " + cc_strike + " Call\n" +
-                                 "DTE: " + str.tostring(optimal_dte) + " days\n" +
-                                 "Profit Target: " + str.tostring(adaptedProfitTarget) + "% of premium\n" +
-                                 "Exit if price rises above " + str.tostring(stop_level)
-                    
-                    table.cell(strategyTable, 2, 4, options_rec, text_color=color.white)
-        
+                                  "DTE: " + dte_text
         else if strategy_rec == "Iron Condor" or strategy_rec == "Iron Butterfly"
-            // FIXED: Added proper bounds checking on strikes array
-            strikes = getStrikes(strategy_rec, close, target_level, stop_level)
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
             if array.size(strikes) > 3
                 ic_long_put = array.get(strikes, 3)
                 ic_short_put = array.get(strikes, 2)
                 ic_short_call = array.get(strikes, 1)
                 ic_long_call = array.get(strikes, 0)
-                
                 if ic_long_put != "" and ic_short_put != "" and ic_short_call != "" and ic_long_call != ""
                     options_rec = "Sell " + ic_short_call + " Call/" + ic_short_put + " Put\n" +
-                                 "Buy " + ic_long_call + " Call/" + ic_long_put + " Put\n" +
-                                 "DTE: " + str.tostring(optimal_dte) + " days\n" +
-                                 "Profit Target: " + str.tostring(adaptedProfitTarget) + "% of max profit"
-                    
-                    table.cell(strategyTable, 2, 4, options_rec, text_color=color.white)
+                                  "Buy " + ic_long_call + " Call/" + ic_long_put + " Put\n" +
+                                  "DTE: " + dte_text
+
+        if options_rec != "N/A"
+            table.cell(strategyTable, 2, 4, options_rec, text_color=color.white, halign=text.align_left) // Align left
+
+        // Detailed Risk Metrics
+        risk_details = "Risk/Trade: " + risk_amount_text + " (" + risk_percent_text + ")\n" +
+                       "Potential Profit: " + (potential_profit > 0 ? str.tostring(potential_profit, "#.##") : "N/A") + "\n" +
+                       "R:R Ratio: " + rr_text + "\n" +
+                       "ATR: " + atr_text
+        table.cell(strategyTable, 2, 11, risk_details, text_color=color.white, halign=text.align_left) // Align left
 //==================================================================================================
 // SECTION 12: PLOTTING AND VISUALIZATION
 //==================================================================================================
@@ -2330,9 +2336,13 @@ var float maxDrawdown = 0.0
 // FIXED: Track entry signals for performance monitoring
 var float entryPrice = 0.0
 var string entrySignal = "None"
-var float stopLossLevel = 0.0
+var string entrySignalOrigin = "None" // Track if bounce or breakout
+var float initialStopLossLevel = 0.0 // Store the initial stop
+var float currentStopLossLevel = 0.0 // This will be trailed
 var float targetLevel = 0.0
 var int entryBar = 0
+var float highestHighSinceEntry = 0.0 // For trailing stop (long)
+var float lowestLowSinceEntry = 999999.0 // For trailing stop (short)
 
 // FIXED: Check for new signals and generate alerts
 if barstate.isconfirmed and enableAlerts
@@ -2341,25 +2351,24 @@ if barstate.isconfirmed and enableAlerts
         totalSignals += 1
         virgin_text = bounceIsVirgin ? "Virgin " : ""
         strategy_name = getAdvancedOptionStrategy(bounceSignal, volRegime, bounceStrength, bounceIsVirgin, bouncePredictedVol, adaptedDte, 0)
-        
         [target, distance] = getNextPivot(bounceSignal, close)
-        stop = getStopLoss(bounceSignal, bounceLevel, atrValue)
+        stop = getStopLoss(bounceSignal, "bounce", bounceLevel, atrValue) // Specify origin
         position = calculatePositionSize(bounceSignal, close, stop, bounceStrength, bounceIsVirgin)
-        
+
         // Standard alert
-        base_alert = virgin_text + "Pivot Bounce " + bounceSignal + " Signal at " + str.tostring(close) + " (" + str.tostring(bounceScore) + "/100)"
+        base_alert = virgin_text + "Pivot Bounce " + bounceSignal + " Signal at " + str.tostring(close, "#.##") + " (" + str.tostring(bounceScore) + "/100)"
         
         // Detailed alert with trade details
         if detailedAlerts
             alert_message = base_alert + "\n" +
-                          "Pivot: " + bouncePivotType + " at " + str.tostring(bounceLevel) + "\n" +
+                          "Pivot: " + bouncePivotType + " at " + str.tostring(bounceLevel, "#.##") + "\n" +
                           "Strategy: " + strategy_name + "\n" +
-                          "Target: " + str.tostring(target) + "\n" +
-                          "Stop: " + str.tostring(stop) + "\n" +
+                          "Target: " + str.tostring(target, "#.##") + "\n" +
+                          "Stop: " + str.tostring(stop, "#.##") + "\n" +
                           "Position: " + str.tostring(position) + " lots\n" +
                           "Strength: " + str.tostring(bounceStrength) + "★\n" +
                           "Volume Spike: " + (isVolumeSpike ? "Yes" : "No") + "\n" +
-                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 ? distance / math.abs(close - stop) : 0, "#.##")
+                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 and math.abs(close - stop) > 0 ? distance / math.abs(close - stop) : 0, "#.##") // Added zero check
         else
             alert_message = base_alert
             
@@ -2368,34 +2377,37 @@ if barstate.isconfirmed and enableAlerts
         // Set entry tracking variables
         entryPrice := close
         entrySignal := bounceSignal
-        stopLossLevel := stop
+        entrySignalOrigin := "bounce"
+        initialStopLossLevel := stop
+        currentStopLossLevel := stop
         targetLevel := target
         entryBar := bar_index
+        highestHighSinceEntry := high // Reset trailing stop trackers
+        lowestLowSinceEntry := low
     
     // Breakout signal alerts
     if breakoutSignal != "None" and (breakoutSignal != lastBreakoutSignal or breakoutLevel != 0.0)
         totalSignals += 1
         virgin_text = breakoutIsVirgin ? "Virgin " : ""
         strategy_name = getAdvancedOptionStrategy(breakoutSignal, volRegime, breakoutStrength, breakoutIsVirgin, breakoutPredictedVol, adaptedDte, 0)
-        
         [target, distance] = getNextPivot(breakoutSignal, close)
-        stop = getStopLoss(breakoutSignal, breakoutLevel, atrValue)
+        stop = getStopLoss(breakoutSignal, "breakout", close, atrValue) // Specify origin and reference
         position = calculatePositionSize(breakoutSignal, close, stop, breakoutStrength, breakoutIsVirgin)
-        
+
         // Standard alert
-        base_alert = virgin_text + "Pivot Breakout " + breakoutSignal + " Signal at " + str.tostring(close) + " (" + str.tostring(breakoutScore) + "/100)"
+        base_alert = virgin_text + "Pivot Breakout " + breakoutSignal + " Signal at " + str.tostring(close, "#.##") + " (" + str.tostring(breakoutScore) + "/100)"
         
         // Detailed alert with trade details
         if detailedAlerts
             alert_message = base_alert + "\n" +
-                          "Pivot: " + breakoutPivotType + " at " + str.tostring(breakoutLevel) + "\n" +
+                          "Pivot: " + breakoutPivotType + " at " + str.tostring(breakoutLevel, "#.##") + "\n" +
                           "Strategy: " + strategy_name + "\n" +
-                          "Target: " + str.tostring(target) + "\n" +
-                          "Stop: " + str.tostring(stop) + "\n" +
+                          "Target: " + str.tostring(target, "#.##") + "\n" +
+                          "Stop: " + str.tostring(stop, "#.##") + "\n" +
                           "Position: " + str.tostring(position) + " lots\n" +
                           "Strength: " + str.tostring(breakoutStrength) + "★\n" +
                           "Volume Spike: " + (isVolumeSpike ? "Yes" : "No") + "\n" +
-                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 ? distance / math.abs(close - stop) : 0, "#.##")
+                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 and math.abs(close - stop) > 0 ? distance / math.abs(close - stop) : 0, "#.##") // Added zero check
         else
             alert_message = base_alert
             
@@ -2404,24 +2416,27 @@ if barstate.isconfirmed and enableAlerts
         // Set entry tracking variables
         entryPrice := close
         entrySignal := breakoutSignal
-        stopLossLevel := stop
+        entrySignalOrigin := "breakout"
+        initialStopLossLevel := stop
+        currentStopLossLevel := stop
         targetLevel := target
         entryBar := bar_index
+        highestHighSinceEntry := high // Reset trailing stop trackers
+        lowestLowSinceEntry := low
     
     // Range signal alerts
     if rangeSignal != "None" and (rangeSignal != lastRangeSignal or (rangeUpperLevel != 0.0 and rangeLowerLevel != 0.0))
         totalSignals += 1
         strategy_name = getAdvancedOptionStrategy(rangeSignal, volRegime, rangeStrength, false, atrValue, adaptedDte, 0)
-        
         // Standard alert
         base_alert = "Range-Bound Signal Detected (" + str.tostring(rangeScore) + "/100)"
-        
+
         // Detailed alert with trade details
         if detailedAlerts
             alert_message = base_alert + "\n" +
-                          "Range: " + str.tostring(rangeLowerLevel) + " to " + str.tostring(rangeUpperLevel) + "\n" +
+                          "Range: " + str.tostring(rangeLowerLevel, "#.##") + " to " + str.tostring(rangeUpperLevel, "#.##") + "\n" +
                           "Strategy: " + strategy_name + "\n" +
-                          "Width: " + str.tostring(math.abs(rangeUpperLevel - rangeLowerLevel)) + "\n" +
+                          "Width: " + str.tostring(math.abs(rangeUpperLevel - rangeLowerLevel), "#.##") + "\n" +
                           "Volume Stability: " + (isVolumeSpike ? "Unstable" : "Stable") + "\n" +
                           "Strength: " + str.tostring(rangeStrength) + "★"
         else
@@ -2436,65 +2451,70 @@ if barstate.isconfirmed and enableAlerts
     lastBreakoutSignal := breakoutSignal
     lastRangeSignal := rangeSignal
 
-// FIXED: Simple performance tracking
-if entrySignal != "None" and entryPrice > 0
-    // For buy signals
+// FIXED: Simple performance tracking with Trailing Stop
+if entrySignal != "None" and entryPrice > 0 and bar_index > entryBar // Ensure trade is active and not on entry bar
+
+    // --- Trailing Stop Logic ---
+    if enableTrailingStop and not na(atrValue) and atrValue > 0
+        if entrySignal == "Buy"
+            // Update highest high since entry
+            highestHighSinceEntry := math.max(highestHighSinceEntry, high)
+            // Calculate potential new trailing stop
+            newTrailStop = highestHighSinceEntry - (atrValue * trailingStopAtrMultiplier)
+            // Trail the stop up
+            currentStopLossLevel := math.max(currentStopLossLevel, newTrailStop)
+        else if entrySignal == "Sell"
+            // Update lowest low since entry
+            lowestLowSinceEntry := math.min(lowestLowSinceEntry, low)
+            // Calculate potential new trailing stop
+            newTrailStop = lowestLowSinceEntry + (atrValue * trailingStopAtrMultiplier)
+            // Trail the stop down
+            currentStopLossLevel := math.min(currentStopLossLevel, newTrailStop)
+
+    // --- Exit Check Logic ---
+    bool targetHit = false
+    bool stopHit = false
+    float exitPrice = 0.0
+
     if entrySignal == "Buy"
-        // Check if target hit (winning trade)
-        if high >= targetLevel and bar_index > entryBar
-            winningTrades += 1
-            trade_profit = (targetLevel - entryPrice) / entryPrice * 100
-            totalProfit += trade_profit
-            
-            // Reset tracking variables
-            entrySignal := "None"
-            entryPrice := 0.0
-            
-            if enableAlerts and detailedAlerts
-                alert("Target hit! Winning trade with profit: " + str.tostring(trade_profit, "#.##") + "%", alert.freq_once_per_bar)
-        
-        // Check if stop loss hit (losing trade)
-        else if low <= stopLossLevel and bar_index > entryBar
-            losingTrades += 1
-            trade_loss = (stopLossLevel - entryPrice) / entryPrice * 100
-            totalProfit += trade_loss  // Will be negative
-            maxDrawdown := math.min(maxDrawdown, trade_loss)
-            
-            // Reset tracking variables
-            entrySignal := "None"
-            entryPrice := 0.0
-            
-            if enableAlerts and detailedAlerts
-                alert("Stop loss hit! Losing trade with loss: " + str.tostring(trade_loss, "#.##") + "%", alert.freq_once_per_bar)
-    
-    // For sell signals
+        targetHit := high >= targetLevel
+        stopHit := low <= currentStopLossLevel
+        exitPrice := targetHit ? targetLevel : (stopHit ? currentStopLossLevel : 0.0)
     else if entrySignal == "Sell"
-        // Check if target hit (winning trade)
-        if low <= targetLevel and bar_index > entryBar
+        targetHit := low <= targetLevel
+        stopHit := high >= currentStopLossLevel
+        exitPrice := targetHit ? targetLevel : (stopHit ? currentStopLossLevel : 0.0)
+
+    // --- Process Exit ---
+    if targetHit or stopHit
+        float tradeResult = 0.0
+        if entrySignal == "Buy"
+            tradeResult := (exitPrice - entryPrice) / entryPrice * 100
+        else if entrySignal == "Sell"
+            tradeResult := (entryPrice - exitPrice) / entryPrice * 100
+
+        if tradeResult > 0
             winningTrades += 1
-            trade_profit = (entryPrice - targetLevel) / entryPrice * 100
-            totalProfit += trade_profit
-            
-            // Reset tracking variables
-            entrySignal := "None"
-            entryPrice := 0.0
-            
             if enableAlerts and detailedAlerts
-                alert("Target hit! Winning trade with profit: " + str.tostring(trade_profit, "#.##") + "%", alert.freq_once_per_bar)
-        
-        // Check if stop loss hit (losing trade)
-        else if high >= stopLossLevel and bar_index > entryBar
+                alert((targetHit ? "Target hit!" : "Trailing Stop Hit (Profit)!") + " Winning trade: " + str.tostring(tradeResult, "#.##") + "%", alert.freq_once_per_bar)
+        else
             losingTrades += 1
-            trade_loss = (entryPrice - stopLossLevel) / entryPrice * 100
-            totalProfit += trade_loss  // Will be negative
-            maxDrawdown := math.min(maxDrawdown, trade_loss)
-            
-            // Reset tracking variables
-            entrySignal := "None"
-            entryPrice := 0.0
-            
+            maxDrawdown := math.min(maxDrawdown, tradeResult)
             if enableAlerts and detailedAlerts
-                alert("Stop loss hit! Losing trade with loss: " + str.tostring(trade_loss, "#.##") + "%", alert.freq_once_per_bar)
+                alert("Stop loss hit! Losing trade: " + str.tostring(tradeResult, "#.##") + "%", alert.freq_once_per_bar)
+
+        totalProfit += tradeResult
+
+        // Reset tracking variables
+        entrySignal := "None"
+        entryPrice := 0.0
+        entrySignalOrigin := "None"
+        initialStopLossLevel := 0.0
+        currentStopLossLevel := 0.0
+        targetLevel := 0.0
+        entryBar := 0
+        highestHighSinceEntry := 0.0
+        lowestLowSinceEntry := 999999.0
 
 // Create custom alert conditions for volume spikes at pivots
 // FIXED: Added proper array bounds checking for alert conditions

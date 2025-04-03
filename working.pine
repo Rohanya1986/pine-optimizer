@@ -418,32 +418,21 @@ var float[] dailyPivotsCache = array.new_float(0)
 var float[] weeklyPivotsCache = array.new_float(0)
 var float[] monthlyPivotsCache = array.new_float(0)
 
-// FIXED: Function to determine if a pivot is "virgin" (never tested before) - optimized version
+// FIXED: Function to determine if a pivot is "virgin" (never tested before) - optimized version using ta.barssince()
 isPivotVirgin(pivotLevel, lookbackBars) =>
     // FIXED: Added comprehensive error checking
     if na(pivotLevel) or pivotLevel <= 0 or lookbackBars <= 0
         false
     else
-        // FIXED: Quick check - find highest high and lowest low to avoid unnecessary processing
-        maxHigh = ta.highest(high, lookbackBars)
-        minLow = ta.lowest(low, lookbackBars)
+        // Use ta.barssince() to find how many bars ago the pivot was last tested
+        // A test occurs if the bar's high is >= pivot and low is <= pivot
+        testedBarsAgo = ta.barssince(high >= pivotLevel and low <= pivotLevel)
         
-        // If pivot is outside range of recent price action, it's virgin
-        if na(maxHigh) or na(minLow)
-            true  // Safer to assume it's virgin if we can't determine
-        else if pivotLevel > maxHigh or pivotLevel < minLow
-            true
-        else
-            // Only check individual bars if necessary
-            wasTestedBefore = false
-            // FIXED: Use math.min to avoid checking more bars than are available
-            actualLookback = math.min(lookbackBars, bar_index)
-            for i = 1 to actualLookback
-                // Check if price has tested this level before
-                if high[i] >= pivotLevel and low[i] <= pivotLevel
-                    wasTestedBefore := true
-                    break
-            not wasTestedBefore
+        // A pivot is virgin if:
+        // 1. It was never tested (testedBarsAgo is na)
+        // 2. The last test occurred further back than our lookback period
+        isVirgin = na(testedBarsAgo) or testedBarsAgo >= lookbackBars
+        isVirgin
 
 // FIXED: Update pivot caches on bar confirmation only (performance optimization)
 if barstate.isconfirmed
@@ -2509,10 +2498,12 @@ if entrySignal != "None" and entryPrice > 0
 
 // Create custom alert conditions for volume spikes at pivots
 // FIXED: Added proper array bounds checking for alert conditions
-alertcondition(isVolumeSpike and array.size(pivotLevelsDaily) > 0 and isNearPivot(close, array.get(pivotLevelsDaily, 0), pivotZoneWidth * 2) or 
-                                showWeekly and array.size(pivotLevelsWeekly) > 0 and isNearPivot(close, array.get(pivotLevelsWeekly, 0), pivotZoneWidth * 2), 
-              "Volume Spike at Pivot", "Volume spike detected near a major pivot level")
+// Separated conditions to ensure size check precedes array.get
+bool dailySpikeNearPivot = isVolumeSpike and showDaily and array.size(pivotLevelsDaily) > 0 and isNearPivot(close, array.get(pivotLevelsDaily, 0), pivotZoneWidth * 2)
+bool weeklySpikeNearPivot = isVolumeSpike and showWeekly and array.size(pivotLevelsWeekly) > 0 and isNearPivot(close, array.get(pivotLevelsWeekly, 0), pivotZoneWidth * 2)
+alertcondition(dailySpikeNearPivot or weeklySpikeNearPivot, "Volume Spike at Pivot", "Volume spike detected near a major pivot level")
+
 
 // Alert for virgin pivot levels being tested
-alertcondition(bounceIsVirgin and bounceSignal != "None", "Virgin Pivot Test", 
+alertcondition(bounceIsVirgin and bounceSignal != "None", "Virgin Pivot Test",
                "Price is testing a virgin pivot level at " + str.tostring(bounceLevel))

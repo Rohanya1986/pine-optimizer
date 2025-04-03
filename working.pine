@@ -106,8 +106,9 @@ trailingStopAtrMultiplier = input.float(2.0, "Trailing Stop ATR Multiplier", min
 // Alert Parameters
 var section7 = "Alerts"
 enableAlerts = input.bool(true, "Enable Alerts", tooltip="Generate alerts when trading signals occur", group=section7)
-alertDistance = input.float(0.5, "Alert Distance (%)", minval=0.1, maxval=2.0, step=0.1, tooltip="Distance from pivot level to trigger alerts", group=section7)
-detailedAlerts = input.bool(true, "Detailed Alert Messages", tooltip="Include comprehensive trade details in alert messages", group=section7)
+minAlertScore = input.int(70, "Minimum Score for ACTION Alert", minval=0, maxval=100, tooltip="Minimum signal score required to trigger an actionable trade alert", group=section7) // New input for alert threshold
+alertDistance = input.float(0.5, "Alert Distance (%)", minval=0.1, maxval=2.0, step=0.1, tooltip="Distance from pivot level to trigger INFO alerts when price is near pivots", group=section7)
+detailedAlerts = input.bool(true, "Detailed Alert Messages", tooltip="Include comprehensive trade details (strategy, risk, etc.) in ACTION/EXIT alert messages", group=section7)
 //==================================================================================================
 // SECTION 2: VOLATILITY ANALYSIS AND REGIME CLASSIFICATION
 //==================================================================================================
@@ -1858,12 +1859,12 @@ drawPivots() =>
                          size = pivotLabelSize) // Use input for size
                 array.push(labels, labelId)
                 
-                // Check for price approaching pivot for alerts
+                // Check for price approaching pivot for INFO alerts
                 if enableAlerts and isNearPivot(close, level, alertDistance)
-                    virginText = isVirgin ? " (Virgin Pivot)" : ""
-                    alert_text = "Price " + str.tostring(close) + " near " + pivotLabel + virginText + " at " + str.tostring(level)
-                    alert(alert_text, alert.freq_once_per_bar)
-    
+                    virginText = isVirgin ? " (Virgin)" : ""
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " near " + pivotLabel + virginText + " at " + str.tostring(level, "#.##")
+                    alert(alert_text, alert.freq_once_per_bar) // Keep this as a general info alert
+
     // Draw weekly pivots
     if showWeekly and array.size(pivotLevelsWeekly) > 0
         // FIXED: Added comprehensive bounds checking in weekly pivots draw loop
@@ -1902,12 +1903,12 @@ drawPivots() =>
                          size = pivotLabelSize) // Use input for size
                 array.push(labels, labelId)
                 
-                // Check for price approaching pivot for alerts
+                // Check for price approaching pivot for INFO alerts
                 if enableAlerts and isNearPivot(close, level, alertDistance)
-                    virginText = isVirgin ? " (Virgin Pivot)" : ""
-                    alert_text = "Price " + str.tostring(close) + " near " + pivotLabel + virginText + " at " + str.tostring(level)
-                    alert(alert_text, alert.freq_once_per_bar)
-    
+                    virginText = isVirgin ? " (Virgin)" : ""
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " near " + pivotLabel + virginText + " at " + str.tostring(level, "#.##")
+                    alert(alert_text, alert.freq_once_per_bar) // Keep this as a general info alert
+
     // Draw monthly pivots
     if showMonthly and array.size(pivotLevelsMonthly) > 0
         // FIXED: Added comprehensive bounds checking in monthly pivots draw loop
@@ -1946,11 +1947,11 @@ drawPivots() =>
                          size = pivotLabelSize) // Use input for size
                 array.push(labels, labelId)
                 
-                // Check for price approaching pivot for alerts
+                // Check for price approaching pivot for INFO alerts
                 if enableAlerts and isNearPivot(close, level, alertDistance)
-                    virginText = isVirgin ? " (Virgin Pivot)" : ""
-                    alert_text = "Price " + str.tostring(close) + " near " + pivotLabel + virginText + " at " + str.tostring(level)
-                    alert(alert_text, alert.freq_once_per_bar)
+                    virginText = isVirgin ? " (Virgin)" : ""
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " near " + pivotLabel + virginText + " at " + str.tostring(level, "#.##")
+                    alert(alert_text, alert.freq_once_per_bar) // Keep this as a general info alert
 
 // FIXED: Draw confluence zones where multiple pivots align
 drawConfluenceZones() =>
@@ -1999,10 +2000,10 @@ drawConfluenceZones() =>
                          size=pivotLabelSize) // Use input for size
                 array.push(labels, labelId)
                 
-                // Alert on strong confluence zones when price is approaching
+                // Alert on strong confluence zones when price is approaching (INFO alert)
                 if enableAlerts and count >= 3 and isNearPivot(close, level, alertDistance)
                     virgin_alert = isVirgin ? "Virgin " : ""
-                    alert_text = "Price " + str.tostring(close) + " approaching strong " + virgin_alert + "confluence zone at " + str.tostring(level)
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " approaching strong (" + str.tostring(count) + "x) " + virgin_alert + "confluence zone at " + str.tostring(level, "#.##")
                     alert(alert_text, alert.freq_once_per_bar)
 
 // FIXED: Create a combined Strategy Dashboard table
@@ -2445,12 +2446,13 @@ get_current_signal() =>
     [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
 
 // FIXED: Trade signal variables for alert generation
-var string lastBounceSignal = "None"
-var string lastBreakoutSignal = "None"
-var string lastRangeSignal = "None"
+// FIXED: Trade signal variables for alert generation & state tracking
+var string lastPrimarySignal = "None"
+var string lastSignalOrigin = "None"
+var float lastSignalLevel = 0.0
 
 // FIXED: Performance tracking variables
-var int totalSignals = 0
+var int totalActionSignals = 0 // Track only alerts meeting minAlertScore
 var int winningTrades = 0
 var int losingTrades = 0
 var float totalProfit = 0.0
@@ -2467,114 +2469,123 @@ var int entryBar = 0
 var float highestHighSinceEntry = 0.0 // For trailing stop (long)
 var float lowestLowSinceEntry = 999999.0 // For trailing stop (short)
 
-// FIXED: Check for new signals and generate alerts
+// FIXED: Consolidated ACTION Signal Alert Generation
 if barstate.isconfirmed and enableAlerts
-    // Bounce signal alerts
-    if bounceSignal != "None" and (bounceSignal != lastBounceSignal or bounceLevel != 0.0)
-        totalSignals += 1
-        virgin_text = bounceIsVirgin ? "Virgin " : ""
-        strategy_name = getAdvancedOptionStrategy(bounceSignal, volRegime, bounceStrength, bounceIsVirgin, bouncePredictedVol, adaptedDte, 0)
-        [target, distance] = getNextPivot(bounceSignal, close)
-        stop = getStopLoss(bounceSignal, "bounce", bounceLevel, atrValue) // Specify origin
-        position = calculatePositionSize(bounceSignal, close, stop, bounceStrength, bounceIsVirgin)
 
-        // Standard alert
-        base_alert = virgin_text + "Pivot Bounce " + bounceSignal + " Signal at " + str.tostring(close, "#.##") + " (" + str.tostring(bounceScore) + "/100)"
-        
-        // Detailed alert with trade details
+    // Determine primary signal for the current bar
+    primary_signal = "None"
+    signal_origin = "None"
+    signal_level = 0.0
+    signal_strength = 0
+    signal_pivot_type = ""
+    signal_is_virgin = false
+    signal_score = 0
+    signal_predicted_vol = 0.0
+
+    // Prioritize Bounce > Breakout > Range
+    if bounceSignal != "None"
+        primary_signal := bounceSignal
+        signal_origin := "bounce"
+        signal_level := bounceLevel
+        signal_strength := bounceStrength
+        signal_pivot_type := bouncePivotType
+        signal_is_virgin := bounceIsVirgin
+        signal_score := bounceScore
+        signal_predicted_vol := bouncePredictedVol
+    else if breakoutSignal != "None"
+        primary_signal := breakoutSignal
+        signal_origin := "breakout"
+        signal_level := breakoutLevel // Level where breakout occurred
+        signal_strength := breakoutStrength
+        signal_pivot_type := breakoutPivotType
+        signal_is_virgin := breakoutIsVirgin
+        signal_score := breakoutScore
+        signal_predicted_vol := breakoutPredictedVol
+    else if rangeSignal != "None"
+        primary_signal := "Range"
+        signal_origin := "range"
+        signal_level := (rangeUpperLevel + rangeLowerLevel) / 2 // Midpoint of range
+        signal_strength := rangeStrength
+        signal_pivot_type := "Range"
+        signal_is_virgin := false // N/A for range
+        signal_score := rangeScore
+        signal_predicted_vol := atrValue // Use current ATR for range
+
+    // Check if a new actionable signal has occurred
+    isNewSignal = primary_signal != "None" and
+                 (primary_signal != lastPrimarySignal or signal_origin != lastSignalOrigin or signal_level != lastSignalLevel) and
+                 signal_score >= minAlertScore // Check against alert threshold
+
+    if isNewSignal
+        totalActionSignals += 1 // Increment count for actionable signals
+        virgin_text = signal_is_virgin ? "Virgin " : ""
+        entry_price = close // Assume entry at close for calculations
+
+        // Calculate details for the alert
+        strategy_name = "N/A"
+        target = 0.0
+        distance = 0.0
+        stop = 0.0
+        position = 0
+        risk_reward_ratio = 0.0
+
+        if primary_signal == "Buy" or primary_signal == "Sell"
+            strategy_name := getAdvancedOptionStrategy(primary_signal, volRegime, signal_strength, signal_is_virgin, signal_predicted_vol, adaptedDte, 0)
+            [target, distance] := getNextPivot(primary_signal, entry_price)
+            stop_ref_level = signal_origin == "bounce" ? signal_level : entry_price // Use pivot for bounce stop, entry for breakout stop
+            stop := getStopLoss(primary_signal, signal_origin, stop_ref_level, atrValue)
+            if stop > 0
+                position := calculatePositionSize(primary_signal, entry_price, stop, signal_strength, signal_is_virgin)
+                if distance > 0 and math.abs(entry_price - stop) > 0
+                    risk_reward_ratio := distance / math.abs(entry_price - stop)
+        else if primary_signal == "Range"
+            strategy_name := getAdvancedOptionStrategy(primary_signal, volRegime, signal_strength, false, signal_predicted_vol, adaptedDte, 0)
+            target := rangeUpperLevel // Use range boundaries for display
+            stop := rangeLowerLevel
+            position := 0 // Position sizing for range needs different logic (not implemented here)
+            risk_reward_ratio := 0.0 // R:R not directly applicable in the same way
+
+        // --- Build Alert Message ---
+        base_alert = "ACTION: " + virgin_text + signal_origin + " " + primary_signal + " Signal @ " + str.tostring(entry_price, "#.##") +
+                     " (Score: " + str.tostring(signal_score) + "/" + str.tostring(minAlertScore) + "+, Str: " + str.tostring(signal_strength) + "★)"
+
         if detailedAlerts
             alert_message = base_alert + "\n" +
-                          "Pivot: " + bouncePivotType + " at " + str.tostring(bounceLevel, "#.##") + "\n" +
+                          "Pivot: " + signal_pivot_type + (signal_origin != "range" ? " at " + str.tostring(signal_level, "#.##") : "") + "\n" +
                           "Strategy: " + strategy_name + "\n" +
                           "Target: " + str.tostring(target, "#.##") + "\n" +
                           "Stop: " + str.tostring(stop, "#.##") + "\n" +
-                          "Position: " + str.tostring(position) + " lots\n" +
-                          "Strength: " + str.tostring(bounceStrength) + "★\n" +
-                          "Volume Spike: " + (isVolumeSpike ? "Yes" : "No") + "\n" +
-                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 and math.abs(close - stop) > 0 ? distance / math.abs(close - stop) : 0, "#.##") // Added zero check
+                          "Position: " + (position > 0 ? str.tostring(position) + " lots" : "N/A") + "\n" +
+                          "R:R: " + (risk_reward_ratio > 0 ? str.tostring(risk_reward_ratio, "#.##") : "N/A") + "\n" +
+                          "Vol: " + volRegime + (isVolumeSpike ? " (Spike)" : "")
         else
             alert_message = base_alert
-            
-        alert(alert_message, alert.freq_once_per_bar)
-        
-        // Set entry tracking variables
-        entryPrice := close
-        entrySignal := bounceSignal
-        entrySignalOrigin := "bounce"
-        initialStopLossLevel := stop
-        currentStopLossLevel := stop
-        targetLevel := target
-        entryBar := bar_index
-        highestHighSinceEntry := high // Reset trailing stop trackers
-        lowestLowSinceEntry := low
-    
-    // Breakout signal alerts
-    if breakoutSignal != "None" and (breakoutSignal != lastBreakoutSignal or breakoutLevel != 0.0)
-        totalSignals += 1
-        virgin_text = breakoutIsVirgin ? "Virgin " : ""
-        strategy_name = getAdvancedOptionStrategy(breakoutSignal, volRegime, breakoutStrength, breakoutIsVirgin, breakoutPredictedVol, adaptedDte, 0)
-        [target, distance] = getNextPivot(breakoutSignal, close)
-        stop = getStopLoss(breakoutSignal, "breakout", close, atrValue) // Specify origin and reference
-        position = calculatePositionSize(breakoutSignal, close, stop, breakoutStrength, breakoutIsVirgin)
 
-        // Standard alert
-        base_alert = virgin_text + "Pivot Breakout " + breakoutSignal + " Signal at " + str.tostring(close, "#.##") + " (" + str.tostring(breakoutScore) + "/100)"
-        
-        // Detailed alert with trade details
-        if detailedAlerts
-            alert_message = base_alert + "\n" +
-                          "Pivot: " + breakoutPivotType + " at " + str.tostring(breakoutLevel, "#.##") + "\n" +
-                          "Strategy: " + strategy_name + "\n" +
-                          "Target: " + str.tostring(target, "#.##") + "\n" +
-                          "Stop: " + str.tostring(stop, "#.##") + "\n" +
-                          "Position: " + str.tostring(position) + " lots\n" +
-                          "Strength: " + str.tostring(breakoutStrength) + "★\n" +
-                          "Volume Spike: " + (isVolumeSpike ? "Yes" : "No") + "\n" +
-                          "Risk/Reward: " + str.tostring(distance > 0 and stop > 0 and math.abs(close - stop) > 0 ? distance / math.abs(close - stop) : 0, "#.##") // Added zero check
+        alert(alert_message, alert.freq_once_per_bar)
+
+        // --- Set entry tracking variables ONLY for Buy/Sell signals ---
+        if primary_signal == "Buy" or primary_signal == "Sell"
+            entryPrice := entry_price
+            entrySignal := primary_signal
+            entrySignalOrigin := signal_origin
+            initialStopLossLevel := stop
+            currentStopLossLevel := stop
+            targetLevel := target
+            entryBar := bar_index
+            highestHighSinceEntry := high // Reset trailing stop trackers
+            lowestLowSinceEntry := low
         else
-            alert_message = base_alert
-            
-        alert(alert_message, alert.freq_once_per_bar)
-        
-        // Set entry tracking variables
-        entryPrice := close
-        entrySignal := breakoutSignal
-        entrySignalOrigin := "breakout"
-        initialStopLossLevel := stop
-        currentStopLossLevel := stop
-        targetLevel := target
-        entryBar := bar_index
-        highestHighSinceEntry := high // Reset trailing stop trackers
-        lowestLowSinceEntry := low
-    
-    // Range signal alerts
-    if rangeSignal != "None" and (rangeSignal != lastRangeSignal or (rangeUpperLevel != 0.0 and rangeLowerLevel != 0.0))
-        totalSignals += 1
-        strategy_name = getAdvancedOptionStrategy(rangeSignal, volRegime, rangeStrength, false, atrValue, adaptedDte, 0)
-        // Standard alert
-        base_alert = "Range-Bound Signal Detected (" + str.tostring(rangeScore) + "/100)"
+            // Reset entry tracking if it was a range signal
+             entrySignal := "None"
 
-        // Detailed alert with trade details
-        if detailedAlerts
-            alert_message = base_alert + "\n" +
-                          "Range: " + str.tostring(rangeLowerLevel, "#.##") + " to " + str.tostring(rangeUpperLevel, "#.##") + "\n" +
-                          "Strategy: " + strategy_name + "\n" +
-                          "Width: " + str.tostring(math.abs(rangeUpperLevel - rangeLowerLevel), "#.##") + "\n" +
-                          "Volume Stability: " + (isVolumeSpike ? "Unstable" : "Stable") + "\n" +
-                          "Strength: " + str.tostring(rangeStrength) + "★"
-        else
-            alert_message = base_alert
-            
-        alert(alert_message, alert.freq_once_per_bar)
-        
-        // Range signals don't use traditional entry tracking
-    
-    // Update last signal states
-    lastBounceSignal := bounceSignal
-    lastBreakoutSignal := breakoutSignal
-    lastRangeSignal := rangeSignal
 
-// FIXED: Simple performance tracking with Trailing Stop
+    // Update last signal state
+    lastPrimarySignal := primary_signal
+    lastSignalOrigin := signal_origin
+    lastSignalLevel := signal_level
+
+
+// FIXED: Simple performance tracking with Trailing Stop & EXIT Alerts
 if entrySignal != "None" and entryPrice > 0 and bar_index > entryBar // Ensure trade is active and not on entry bar
 
     // --- Trailing Stop Logic ---
@@ -2616,19 +2627,22 @@ if entrySignal != "None" and entryPrice > 0 and bar_index > entryBar // Ensure t
         else if entrySignal == "Sell"
             tradeResult := (entryPrice - exitPrice) / entryPrice * 100
 
+        // --- Generate EXIT Alert ---
+        if enableAlerts
+            exit_reason = targetHit ? "Target Hit" : "Stop Hit"
+            outcome = tradeResult > 0 ? "WIN" : "LOSS"
+            exit_alert_msg = "EXIT: " + entrySignal + " Trade Closed (" + exit_reason + " @ " + str.tostring(exitPrice, "#.##") + "). Outcome: " + outcome + " (" + str.tostring(tradeResult, "#.##") + "%)"
+            alert(exit_alert_msg, alert.freq_once_per_bar)
+
+        // Update performance stats
         if tradeResult > 0
             winningTrades += 1
-            if enableAlerts and detailedAlerts
-                alert((targetHit ? "Target hit!" : "Trailing Stop Hit (Profit)!") + " Winning trade: " + str.tostring(tradeResult, "#.##") + "%", alert.freq_once_per_bar)
         else
             losingTrades += 1
             maxDrawdown := math.min(maxDrawdown, tradeResult)
-            if enableAlerts and detailedAlerts
-                alert("Stop loss hit! Losing trade: " + str.tostring(tradeResult, "#.##") + "%", alert.freq_once_per_bar)
-
         totalProfit += tradeResult
 
-        // Reset tracking variables
+        // --- Reset tracking variables ---
         entrySignal := "None"
         entryPrice := 0.0
         entrySignalOrigin := "None"
@@ -2639,14 +2653,34 @@ if entrySignal != "None" and entryPrice > 0 and bar_index > entryBar // Ensure t
         highestHighSinceEntry := 0.0
         lowestLowSinceEntry := 999999.0
 
-// Create custom alert conditions for volume spikes at pivots
-// FIXED: Added proper array bounds checking for alert conditions
-// Separated conditions to ensure size check precedes array.get
-bool dailySpikeNearPivot = isVolumeSpike and showDaily and array.size(pivotLevelsDaily) > 0 and isNearPivot(close, array.get(pivotLevelsDaily, 0), pivotZoneWidth * 2)
-bool weeklySpikeNearPivot = isVolumeSpike and showWeekly and array.size(pivotLevelsWeekly) > 0 and isNearPivot(close, array.get(pivotLevelsWeekly, 0), pivotZoneWidth * 2)
-alertcondition(dailySpikeNearPivot or weeklySpikeNearPivot, "Volume Spike at Pivot", "Volume spike detected near a major pivot level")
+// INFO Alert Conditions using alertcondition()
+// These are less critical, more for awareness
 
+// Volume Spike near any major pivot
+bool spikeNearAnyPivot = false
+if isVolumeSpike
+    // Check Daily Pivots
+    if showDaily and array.size(pivotLevelsDaily) > 0
+        for i = 0 to math.min(array.size(pivotLevelsDaily), 5) - 1 // Check first few daily
+            if i < array.size(pivotLevelsDaily)
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0 and isNearPivot(close, level, pivotZoneWidth * 2)
+                    spikeNearAnyPivot := true
+                    break
+    // Check Weekly Pivots if not already found
+    if not spikeNearAnyPivot and showWeekly and array.size(pivotLevelsWeekly) > 0
+        for i = 0 to math.min(array.size(pivotLevelsWeekly), 3) - 1 // Check first few weekly
+             if i < array.size(pivotLevelsWeekly)
+                level = array.get(pivotLevelsWeekly, i)
+                if not na(level) and level > 0 and isNearPivot(close, level, pivotZoneWidth * 2)
+                    spikeNearAnyPivot := true
+                    break
+alertcondition(spikeNearAnyPivot, "INFO: Volume Spike Near Pivot", "INFO: Volume spike detected near a pivot level (" + str.tostring(close, "#.##") + ")")
 
-// Alert for virgin pivot levels being tested
-alertcondition(bounceIsVirgin and bounceSignal != "None", "Virgin Pivot Test",
-               "Price is testing a virgin pivot level at " + str.tostring(bounceLevel))
+// Virgin Pivot being tested (based on bounce logic primarily)
+bool virginTestOccurring = (bounceIsVirgin and bounceSignal != "None") or (breakoutIsVirgin and breakoutSignal != "None")
+float virginLevel = bounceIsVirgin ? bounceLevel : (breakoutIsVirgin ? breakoutLevel : 0.0)
+string virginPivotLabel = bounceIsVirgin ? bouncePivotType : (breakoutIsVirgin ? breakoutPivotType : "")
+
+alertcondition(virginTestOccurring and virginLevel > 0, "INFO: Virgin Pivot Test",
+               "INFO: Price testing Virgin Pivot " + virginPivotLabel + " at " + str.tostring(virginLevel, "#.##"))

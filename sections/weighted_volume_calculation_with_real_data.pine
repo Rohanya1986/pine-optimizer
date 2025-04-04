@@ -48,7 +48,8 @@ calculate_weighted_volume() =>
     vol10 := na(vol10) ? 0.0 : vol10
     
     // Check if all volumes are 0 or NA, indicating possible data issues
-    allZero = vol1 == 0 and vol2 == 0 and vol3 == 0 and vol4 == 0 and vol5 == 0
+    // FIXED: Corrected to check all 10 constituent volumes
+    allZero = vol1 == 0 and vol2 == 0 and vol3 == 0 and vol4 == 0 and vol5 == 0 and vol6 == 0 and vol7 == 0 and vol8 == 0 and vol9 == 0 and vol10 == 0
     
     // FIXED: Improved fallback mechanism with volume[1] to prevent repainting
     if allZero
@@ -110,4 +111,3 @@ var bool isVolumeSpike = false
 if barstate.isconfirmed
     smartVolume := calculate_smart_volume()
     [isVolumeSpike, volumeMA] = detect_volume_spike(smartVolume, volumeSpikeFactor)
-

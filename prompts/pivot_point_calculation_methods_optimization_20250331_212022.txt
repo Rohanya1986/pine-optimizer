@@ -1,0 +1,138 @@
+# Pine Script Optimization Task
+
+I need to optimize the following section of my Pine Script trading strategy:
+
+## Section: PIVOT POINT CALCULATION METHODS
+Improve error handling
+
+## Current Implementation:
+```pine
+//==================================================================================================
+// SECTION 4: PIVOT POINT CALCULATION METHODS - Robust implementations with error handling
+//==================================================================================================
+
+// FIXED: Standard Floor Trader Pivots with enhanced error handling
+calcStandardPivots(high, low, close) =>
+    // FIXED: Enhanced error handling with explicit return of properly sized array
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + close) / 3
+        r1 = (2 * p) - low
+        s1 = (2 * p) - high
+        r2 = p + (high - low)
+        s2 = p - (high - low)
+        r3 = high + 2 * (p - low)
+        s3 = low - 2 * (high - p)
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Woodie's Pivots with enhanced error handling
+calcWoodiePivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + 2 * close) / 4  // More weight to close
+        r1 = (2 * p) - low
+        s1 = (2 * p) - high
+        r2 = p + (high - low)
+        s2 = p - (high - low)
+        r3 = r1 + (high - low)
+        s3 = s1 - (high - low)
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Camarilla Pivots with enhanced error handling
+calcCamarillaPivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(9, 0)  // Return zeros if inputs are NA or invalid
+    else
+        price_range = high - low
+        h4 = close + price_range * 1.1 / 2
+        h3 = close + price_range * 1.1 / 4
+        h2 = close + price_range * 1.1 / 6
+        h1 = close + price_range * 1.1 / 12
+        l1 = close - price_range * 1.1 / 12
+        l2 = close - price_range * 1.1 / 6
+        l3 = close - price_range * 1.1 / 4
+        l4 = close - price_range * 1.1 / 2
+        p = (high + low + close) / 3
+        array.from(p, h1, h2, h3, h4, l1, l2, l3, l4)
+
+// FIXED: Fibonacci Pivots with enhanced error handling
+calcFibonacciPivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + close) / 3
+        price_range = high - low
+        r1 = p + 0.382 * price_range
+        r2 = p + 0.618 * price_range
+        r3 = p + 1.000 * price_range
+        s1 = p - 0.382 * price_range
+        s2 = p - 0.618 * price_range
+        s3 = p - 1.000 * price_range
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Function to get appropriate pivots based on selected method with improved error handling
+getPivots(high, low, close, method) =>
+    // FIXED: Initialize result with proper default before conditional logic
+    float[] result = array.new_float(7, 0)
+    
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        result
+    else
+        if method == "Standard"
+            result := calcStandardPivots(high, low, close)
+        else if method == "Woodie"
+            result := calcWoodiePivots(high, low, close)
+        else if method == "Camarilla"
+            result := calcCamarillaPivots(high, low, close)
+        else if method == "Fibonacci"
+            result := calcFibonacciPivots(high, low, close)
+        else
+            result := calcStandardPivots(high, low, close)  // Default to Standard
+        result
+
+```
+
+## Global Context:
+The script contains 22 sections with these line counts:
+INPUT PARAMETERS (101 lines), VOLATILITY ANALYSIS AND REGIME CLASSIFICATION (75 lines), WEIGHTED VOLUME CALCULATION WITH REAL DATA (114 lines), PIVOT POINT CALCULATION METHODS (85 lines), MULTI (99 lines), PIVOT ARRAYS AND LABELS WITH IMPROVED MEMORY MANAGEMENT (106 lines), PIVOT ZONE AND CONFLUENCE DETECTION WITH OPTIMIZATIONS (251 lines), ENHANCED SIGNAL FILTERING WITH MULTI (86 lines), ENHANCED STRATEGY SIGNAL CALCULATION WITH VIRGIN PIVOT DETECTION (476 lines), OPTIONS STRATEGY SELECTION AND MANAGEMENT (368 lines), VISUALIZATION WITH IMPROVED MEMORY MANAGEMENT (520 lines), PLOTTING AND VISUALIZATION (36 lines), ALERTS AND PERFORMANCE TRACKING (208 lines), VOLATILITY ANALYSIS (3 lines), WEIGHTED VOLUME CALCULATION (3 lines), PIVOT POINT CALCULATION (3 lines), MULTI-TIMEFRAME DATA (3 lines), PIVOT ARRAYS AND LABELS (3 lines), PIVOT ZONE AND CONFLUENCE DETECTION (3 lines), STRATEGY SIGNAL CALCULATION (3 lines), OPTIONS STRATEGY SELECTION (3 lines), VISUALIZATION (3 lines)
+
+Key global variables that might be referenced:
+```pine
+var section1 = "Strategy Settings"
+var section2 = "Visualization Settings"
+var section_vol = "Weighted Volume Settings"
+var section_const = "Constituents"
+var section3 = "Signal Filters"
+var section4 = "Strategy Types"
+var section5 = "Risk Management"
+var section6 = "Options Parameters"
+var section7 = "Alerts"
+var string autoSelectedPivotMethod = pivotType
+var float smartVolume = 0.0
+var float volumeMA = 0.0
+var bool isVolumeSpike = false
+var float[] dailyPivotsCache = array.new_float(0)
+var float[] weeklyPivotsCache = array.new_float(0)
+var float[] monthlyPivotsCache = array.new_float(0)
+var float[] pivotLevelsDaily = array.new_float(0)
+var string[] pivotLabelsDaily = array.new_string(0)
+var bool[] pivotIsVirginDaily = array.new_bool(0)
+var float[] pivotLevelsWeekly = array.new_float(0)  # Showing first 20 global variables
+```
+
+## Optimization Requirements:
+1. Please optimize this code section while maintaining ALL original functionality
+2. Focus on improving: performance, error handling, and code quality
+3. You MUST keep ALL function signatures, input parameters, and output formats EXACTLY the same
+4. The optimized code should be a DROP-IN REPLACEMENT for the original section
+5. Return the COMPLETE optimized section, not just code snippets
+6. DO NOT reduce functionality - improve the implementation without removing features
+7. Add proper error handling for all operations
+8. Add helpful comments explaining major optimizations
+
+## Important Instructions:
+- Provide the FULL optimized section code that I can directly copy and use
+- Explain your key optimization changes after the code
+- If any parts cannot be optimized further, explain why

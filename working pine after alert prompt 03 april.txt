@@ -1,0 +1,2686 @@
+// @version=5
+// @description Advanced Nifty 50 Pivot-Based Options Trading Strategy with Weighted Volume Integration
+// This strategy integrates pivot calculations, volatility analysis, multi-timeframe confluence,
+// options strategy selection, weighted volume analysis, and risk management based on "Secrets of a Pivot Boss" methodology.
+indicator("Nifty 50 Pivot-Volume Options Strategy", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+//==================================================================================================
+// SECTION 1: INPUT PARAMETERS - Organized into logical groups with tooltips
+//==================================================================================================
+
+// Main Strategy Parameters
+var section1 = "Strategy Settings"
+pivotType = input.string("Standard", "Pivot Calculation Method", options=["Standard", "Woodie", "Camarilla", "Fibonacci"], tooltip="Select the pivot calculation method to use for analysis", group=section1)
+showDaily = input.bool(true, "Show Daily Pivots", tooltip="Display daily timeframe pivot levels", group=section1)
+showWeekly = input.bool(true, "Show Weekly Pivots", tooltip="Display weekly timeframe pivot levels", group=section1)
+showMonthly = input.bool(false, "Show Monthly Pivots", tooltip="Display monthly timeframe pivot levels", group=section1)
+enableAutoMethodSelection = input.bool(true, "Auto-Select Pivot Method Based on Volatility", tooltip="Automatically choose the best pivot method for current market conditions", group=section1)
+virginPivotLookback = input.int(20, "Virgin Pivot Lookback (Bars)", minval=5, maxval=100, tooltip="Number of bars to check if a pivot has been tested before", group=section1)
+
+// Visualization Parameters
+var section2 = "Visualization Settings"
+pivotZoneWidth = input.float(0.25, "Pivot Zone Width (%)", minval=0.1, maxval=1.0, step=0.05, tooltip="Width of the zone around pivot levels (as percentage of price)", group=section2)
+showConfluence = input.bool(true, "Highlight Confluence Zones", tooltip="Highlight areas where multiple pivot levels overlap", group=section2)
+confluenceThreshold = input.float(0.3, "Confluence Threshold (%)", minval=0.1, maxval=1.0, step=0.05, tooltip="Maximum distance between pivots to be considered confluent (as percentage of price)", group=section2)
+showDashboard = input.bool(true, "Show Strategy Dashboard", tooltip="Display the main information panel", group=section2) // Renamed from showOptionIndicators
+pivotLabelSize = input.string(size.small, "Pivot Label Size", options=[size.tiny, size.small, size.normal], group=section2)
+signalShapeSize = input.string(size.normal, "Signal Shape Size", options=[size.small, size.normal, size.large], group=section2) // Added input for signal size
+maxDrawingObjects = input.int(200, "Maximum Drawing Objects", minval=50, maxval=500, step=10, tooltip="Limit the number of drawing objects to prevent memory issues", group=section2)
+
+// Weighted Volume Parameters
+var section_vol = "Weighted Volume Settings"
+volumeMALength = input.int(20, "Volume MA Length", minval=1, group=section_vol)
+volumeSpikeFactor = input.float(1.5, "Volume Spike Threshold", minval=1.0, step=0.1, group=section_vol)
+useSmartVolume = input.bool(true, "Use Smart Volume Calculation", group=section_vol)
+volumeSmoothing = input.int(3, "Volume Smoothing", minval=1, group=section_vol)
+
+// Nifty 50 Constituents Definition
+var section_const = "Constituents"
+// Define top 10 NIFTY 50 constituents and their weights (as of Feb 28, 2025)
+constSymbol1 = input.string("NSE:HDFCBANK", "Constituent 1 Symbol", group=section_const)
+constWeight1 = input.float(0.1328, "Constituent 1 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol2 = input.string("NSE:ICICIBANK", "Constituent 2 Symbol", group=section_const)
+constWeight2 = input.float(0.0857, "Constituent 2 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol3 = input.string("NSE:RELIANCE", "Constituent 3 Symbol", group=section_const)
+constWeight3 = input.float(0.0821, "Constituent 3 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol4 = input.string("NSE:INFY", "Constituent 4 Symbol", group=section_const)
+constWeight4 = input.float(0.0613, "Constituent 4 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol5 = input.string("NSE:BHARTIARTL", "Constituent 5 Symbol", group=section_const)
+constWeight5 = input.float(0.0425, "Constituent 5 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol6 = input.string("NSE:LT", "Constituent 6 Symbol", group=section_const)
+constWeight6 = input.float(0.0376, "Constituent 6 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol7 = input.string("NSE:ITC", "Constituent 7 Symbol", group=section_const)
+constWeight7 = input.float(0.0370, "Constituent 7 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol8 = input.string("NSE:TCS", "Constituent 8 Symbol", group=section_const)
+constWeight8 = input.float(0.0359, "Constituent 8 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol9 = input.string("NSE:AXISBANK", "Constituent 9 Symbol", group=section_const)
+constWeight9 = input.float(0.0292, "Constituent 9 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+constSymbol10 = input.string("NSE:KOTAKBANK", "Constituent 10 Symbol", group=section_const)
+constWeight10 = input.float(0.0282, "Constituent 10 Weight", minval=0.0, maxval=1.0, step=0.0001, group=section_const)
+
+// Signal Filter Parameters
+var section3 = "Signal Filters"
+enableVolumeFilter = input.bool(true, "Enable Volume Filter", tooltip="Require volume confirmation for signals", group=section3)
+volumeThreshold = input.float(1.5, "Volume Threshold Multiplier", minval=1.0, maxval=3.0, step=0.1, tooltip="Minimum volume required as multiple of average volume", group=section3)
+enablePatternFilter = input.bool(true, "Enable Candlestick Pattern Filter", tooltip="Require candlestick pattern confirmation for signals", group=section3)
+enableRsiFilter = input.bool(true, "Enable RSI Filter", tooltip="Use RSI as an additional filter for signals", group=section3)
+rsiThreshold = input.int(30, "RSI Threshold", minval=20, maxval=40, tooltip="RSI threshold for oversold conditions", group=section3)
+minConfluenceForSignal = input.int(2, "Minimum Confluence Count for Signal", minval=1, maxval=3, tooltip="Minimum number of confluent pivots required for a valid signal", group=section3)
+minSignalScore = input.int(60, "Minimum Signal Score (0-100)", minval=0, maxval=100, tooltip="Minimum score required for a valid trading signal", group=section3)
+
+// Strategy Types to Monitor
+var section4 = "Strategy Types"
+showPivotBounceSignals = input.bool(true, "Show Pivot Bounce Signals", tooltip="Display signals for price bouncing off pivot levels", group=section4)
+showPivotBreakoutSignals = input.bool(true, "Show Pivot Breakout Signals", tooltip="Display signals for price breaking through pivot levels", group=section4)
+showRangeSignals = input.bool(true, "Show Range-Based Signals", tooltip="Display signals for range-bound price action between pivots", group=section4)
+
+// Risk Management Parameters
+var section5 = "Risk Management"
+accountSize = input.float(1000000, "Account Size", minval=10000, tooltip="Your trading account size for position sizing calculations", group=section5)
+baseRiskPercent = input.float(1.5, "Base Risk Percentage", minval=0.5, maxval=5.0, step=0.1, tooltip="Base percentage of account to risk per trade", group=section5)
+maxDailyDrawdown = input.float(3.0, "Max Daily Drawdown %", minval=1.0, maxval=10.0, step=0.5, tooltip="Maximum acceptable daily drawdown percentage", group=section5)
+maxPositionSize = input.int(10, "Maximum Position Size (Lots)", minval=1, step=1, tooltip="Maximum number of lots for any trade", group=section5)
+adaptPositionToVolatility = input.bool(true, "Adapt Position Size to Volatility", tooltip="Automatically adjust position size based on current volatility", group=section5)
+lotSize = input.int(50, "Nifty 50 Lot Size", minval=1, step=1, tooltip="Number of shares/contracts per lot", group=section5)
+
+// Options Specific Parameters
+var section6 = "Options Parameters"
+daysToExpiry = input.int(15, "Default Days to Expiry", minval=7, maxval=45, step=1, tooltip="Default number of days to expiration for options", group=section6)
+adaptDteToVolatility = input.bool(true, "Adapt DTE to Volatility", tooltip="Adjust days to expiry based on volatility regime", group=section6)
+profitTargetPercent = input.int(60, "Profit Target Percentage", minval=30, maxval=90, step=5, tooltip="Target percentage of maximum profit for options trades", group=section6)
+useFixedStopLoss = input.bool(false, "Use Fixed Stop Loss", tooltip="Use a fixed percentage stop loss instead of ATR-based", group=section6)
+fixedStopLossPercent = input.float(30, "Fixed Stop Loss Percentage", minval=10, maxval=50, step=5, tooltip="Fixed stop loss as percentage of the underlying index level", group=section6) // Corrected tooltip
+atrStopMultiplier = input.float(1.2, "ATR Stop Multiplier", minval=0.5, maxval=3.0, step=0.1, tooltip="Multiplier for ATR-based initial stop loss", group=section6)
+enableTrailingStop = input.bool(true, "Enable Trailing Stop", tooltip="Enable ATR-based trailing stop loss", group=section6)
+trailingStopAtrMultiplier = input.float(2.0, "Trailing Stop ATR Multiplier", minval=1.0, maxval=5.0, step=0.1, tooltip="Multiplier for ATR-based trailing stop loss", group=section6)
+
+// Alert Parameters
+var section7 = "Alerts"
+enableAlerts = input.bool(true, "Enable Alerts", tooltip="Generate alerts when trading signals occur", group=section7)
+minAlertScore = input.int(70, "Minimum Score for ACTION Alert", minval=0, maxval=100, tooltip="Minimum signal score required to trigger an actionable trade alert", group=section7) // New input for alert threshold
+alertDistance = input.float(0.5, "Alert Distance (%)", minval=0.1, maxval=2.0, step=0.1, tooltip="Distance from pivot level to trigger INFO alerts when price is near pivots", group=section7)
+detailedAlerts = input.bool(true, "Detailed Alert Messages", tooltip="Include comprehensive trade details (strategy, risk, etc.) in ACTION/EXIT alert messages", group=section7)
+//==================================================================================================
+// SECTION 2: VOLATILITY ANALYSIS AND REGIME CLASSIFICATION
+//==================================================================================================
+
+// Calculate ATR for volatility estimation with proper error handling
+atrPeriod = 14
+atrValue = ta.atr(atrPeriod)
+atrPercent = close > 0 ? (atrValue / close) * 100 : 0  // FIXED: Prevent division by zero
+
+// Define volatility regimes
+lowVolRegime = atrPercent < 0.8
+normalVolRegime = atrPercent >= 0.8 and atrPercent <= 1.5
+highVolRegime = atrPercent > 1.5
+extremeVolRegime = atrPercent > 2.5
+
+// Get current volatility regime as string
+volRegime = extremeVolRegime ? "EXTREME" : highVolRegime ? "HIGH" : lowVolRegime ? "LOW" : "NORMAL"
+
+// Get trend strength using ADX
+adxLen = 14
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
+trendStrength = adxValue
+isTrending = adxValue > 25
+trendDirection = diPlus > diMinus ? "up" : "down"
+
+// Calculate volatility-adjusted parameters
+adaptedZoneWidth = pivotZoneWidth
+adaptedVolumeThreshold = volumeThreshold
+adaptedProfitTarget = profitTargetPercent
+adaptedStopLossMultiplier = atrStopMultiplier
+adaptedPositionSize = 1.0
+adaptedDte = daysToExpiry
+
+// FIXED: Added barstate.isconfirmed check to avoid recalculating parameters on every bar
+if barstate.isconfirmed and adaptPositionToVolatility
+    if extremeVolRegime
+        adaptedZoneWidth := 0.4
+        adaptedVolumeThreshold := 2.0
+        adaptedProfitTarget := math.min(profitTargetPercent + 30, 90)
+        adaptedStopLossMultiplier := math.min(atrStopMultiplier + 0.5, 3.0)
+        adaptedPositionSize := 0.5
+        adaptedDte := adaptDteToVolatility ? math.max(daysToExpiry - 8, 5) : daysToExpiry
+    else if highVolRegime
+        adaptedZoneWidth := 0.35
+        adaptedVolumeThreshold := 1.8
+        adaptedProfitTarget := math.min(profitTargetPercent + 20, 90)
+        adaptedStopLossMultiplier := math.min(atrStopMultiplier + 0.3, 3.0)
+        adaptedPositionSize := 0.7
+        adaptedDte := adaptDteToVolatility ? math.max(daysToExpiry - 5, 7) : daysToExpiry
+    else if lowVolRegime
+        adaptedZoneWidth := 0.18
+        adaptedVolumeThreshold := 1.3
+        adaptedProfitTarget := math.max(profitTargetPercent - 15, 30)
+        adaptedStopLossMultiplier := math.max(atrStopMultiplier - 0.2, 0.5)
+        adaptedPositionSize := 1.2
+        adaptedDte := adaptDteToVolatility ? math.min(daysToExpiry + 10, 30) : daysToExpiry
+
+// FIXED: Added var to calculate this just once per bar
+var string autoSelectedPivotMethod = pivotType
+
+// FIXED: Added barstate.isconfirmed check for auto-selection
+if barstate.isconfirmed and enableAutoMethodSelection
+    if lowVolRegime
+        autoSelectedPivotMethod := "Camarilla"  // Best in low volatility
+    else if highVolRegime
+        autoSelectedPivotMethod := "Woodie"     // Better in high volatility due to close weighting
+    else if isTrending            // ADX > 25 indicates trend
+        autoSelectedPivotMethod := "Fibonacci"  // Better for trending markets
+    else
+        autoSelectedPivotMethod := "Standard"   // Solid all-around performer
+
+// Use auto-selected or manually selected pivot method
+activePivotMethod = enableAutoMethodSelection ? autoSelectedPivotMethod : pivotType
+
+//==================================================================================================
+// SECTION 3: WEIGHTED VOLUME CALCULATION WITH REAL DATA
+//==================================================================================================
+
+// FIXED: Calculate weighted volume using real constituent data with improved error handling
+calculate_weighted_volume() =>
+    // FIXED: Added proper error handling for security calls and initialized with default values
+    float vol1 = 0.0
+    float vol2 = 0.0
+    float vol3 = 0.0
+    float vol4 = 0.0
+    float vol5 = 0.0
+    float vol6 = 0.0
+    float vol7 = 0.0
+    float vol8 = 0.0
+    float vol9 = 0.0
+    float vol10 = 0.0
+    
+    // FIXED: Modified security calls to prevent repainting
+    vol1 := request.security(constSymbol1, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol1 := na(vol1) ? 0.0 : vol1
+
+    vol2 := request.security(constSymbol2, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol2 := na(vol2) ? 0.0 : vol2
+
+    vol3 := request.security(constSymbol3, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol3 := na(vol3) ? 0.0 : vol3
+
+    vol4 := request.security(constSymbol4, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol4 := na(vol4) ? 0.0 : vol4
+
+    vol5 := request.security(constSymbol5, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol5 := na(vol5) ? 0.0 : vol5
+
+    vol6 := request.security(constSymbol6, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol6 := na(vol6) ? 0.0 : vol6
+
+    vol7 := request.security(constSymbol7, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol7 := na(vol7) ? 0.0 : vol7
+
+    vol8 := request.security(constSymbol8, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol8 := na(vol8) ? 0.0 : vol8
+
+    vol9 := request.security(constSymbol9, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol9 := na(vol9) ? 0.0 : vol9
+
+    vol10 := request.security(constSymbol10, timeframe.period, volume[1], barmerge.gaps_off, barmerge.lookahead_off)
+    vol10 := na(vol10) ? 0.0 : vol10
+    
+    // Check if all volumes are 0 or NA, indicating possible data issues
+    allZero = vol1 == 0 and vol2 == 0 and vol3 == 0 and vol4 == 0 and vol5 == 0
+    
+    // FIXED: Improved fallback mechanism with volume[1] to prevent repainting
+    if allZero
+        // Fallback to current symbol volume if constituent data is unavailable
+        volume[1]  // Use previous bar's volume to prevent repainting
+    else
+        // Calculate weighted volume
+        weightedVol = vol1 * constWeight1 + 
+                     vol2 * constWeight2 + 
+                     vol3 * constWeight3 + 
+                     vol4 * constWeight4 + 
+                     vol5 * constWeight5 + 
+                     vol6 * constWeight6 + 
+                     vol7 * constWeight7 + 
+                     vol8 * constWeight8 + 
+                     vol9 * constWeight9 + 
+                     vol10 * constWeight10
+        
+        // Apply smoothing if enabled
+        if volumeSmoothing > 1
+            weightedVol := ta.sma(weightedVol, volumeSmoothing)
+        
+        weightedVol
+
+// FIXED: Calculate Smart Volume using weighted constituent volume with improved error handling
+calculate_smart_volume() =>
+    float result = 0.0
+    
+    // Get weighted volume from top 10 constituents
+    result := calculate_weighted_volume()
+    
+    // Additional processing for smart volume
+    if useSmartVolume
+        // Apply a standardization to ensure the volume is in a useful range
+        // Normalize using moving average to handle varying volume scales
+        volMA = ta.sma(result, 10)
+        // FIXED: Added safeguard against division by zero
+        result := volMA > 0 ? result / volMA * 1000 : result
+    
+    result
+
+// FIXED: Detect Volume Spikes using weighted volume with improved error handling
+detect_volume_spike(vol, threshold) =>
+    // FIXED: Added safeguard for NA values
+    float safeVol = na(vol) ? 0.0 : vol
+    float safeThreshold = na(threshold) ? 1.5 : threshold
+    
+    // Extract ta.sma call to ensure it's called consistently on each calculation
+    float volMA = ta.sma(safeVol, volumeMALength)
+    bool isSpike = volMA > 0 and safeVol >= volMA * safeThreshold
+    [isSpike, volMA]
+
+// FIXED: Properly initializing variables to prevent undefined references
+var float smartVolume = 0.0
+var float volumeMA = 0.0
+var bool isVolumeSpike = false
+
+// FIXED: Only calculate on bar confirmation to improve performance
+if barstate.isconfirmed
+    smartVolume := calculate_smart_volume()
+    [isVolumeSpike, volumeMA] = detect_volume_spike(smartVolume, volumeSpikeFactor)
+
+//==================================================================================================
+// SECTION 4: PIVOT POINT CALCULATION METHODS - Robust implementations with error handling
+//==================================================================================================
+
+// FIXED: Standard Floor Trader Pivots with enhanced error handling
+calcStandardPivots(high, low, close) =>
+    // FIXED: Enhanced error handling with explicit return of properly sized array
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + close) / 3
+        r1 = (2 * p) - low
+        s1 = (2 * p) - high
+        r2 = p + (high - low)
+        s2 = p - (high - low)
+        r3 = high + 2 * (p - low)
+        s3 = low - 2 * (high - p)
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Woodie's Pivots with enhanced error handling
+calcWoodiePivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + 2 * close) / 4  // More weight to close
+        r1 = (2 * p) - low
+        s1 = (2 * p) - high
+        r2 = p + (high - low)
+        s2 = p - (high - low)
+        r3 = r1 + (high - low)
+        s3 = s1 - (high - low)
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Camarilla Pivots with enhanced error handling
+calcCamarillaPivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(9, 0)  // Return zeros if inputs are NA or invalid
+    else
+        price_range = high - low
+        h4 = close + price_range * 1.1 / 2
+        h3 = close + price_range * 1.1 / 4
+        h2 = close + price_range * 1.1 / 6
+        h1 = close + price_range * 1.1 / 12
+        l1 = close - price_range * 1.1 / 12
+        l2 = close - price_range * 1.1 / 6
+        l3 = close - price_range * 1.1 / 4
+        l4 = close - price_range * 1.1 / 2
+        p = (high + low + close) / 3
+        array.from(p, h1, h2, h3, h4, l1, l2, l3, l4)
+
+// FIXED: Fibonacci Pivots with enhanced error handling
+calcFibonacciPivots(high, low, close) =>
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        array.new_float(7, 0)  // Return zeros if inputs are NA or invalid
+    else
+        p = (high + low + close) / 3
+        price_range = high - low
+        r1 = p + 0.382 * price_range
+        r2 = p + 0.618 * price_range
+        r3 = p + 1.000 * price_range
+        s1 = p - 0.382 * price_range
+        s2 = p - 0.618 * price_range
+        s3 = p - 1.000 * price_range
+        array.from(p, r1, r2, r3, s1, s2, s3)
+
+// FIXED: Function to get appropriate pivots based on selected method with improved error handling
+getPivots(high, low, close, method) =>
+    // FIXED: Initialize result with proper default before conditional logic
+    float[] result = array.new_float(7, 0)
+    
+    if na(high) or na(low) or na(close) or high <= 0 or low <= 0 or close <= 0
+        result
+    else
+        if method == "Standard"
+            result := calcStandardPivots(high, low, close)
+        else if method == "Woodie"
+            result := calcWoodiePivots(high, low, close)
+        else if method == "Camarilla"
+            result := calcCamarillaPivots(high, low, close)
+        else if method == "Fibonacci"
+            result := calcFibonacciPivots(high, low, close)
+        else
+            result := calcStandardPivots(high, low, close)  // Default to Standard
+        result
+//==================================================================================================
+// SECTION 5: MULTI-TIMEFRAME DATA WITH OPTIMIZATIONS
+//==================================================================================================
+
+// FIXED: Get High, Low, Close values for different timeframes using optimized request function
+// Combines requests to reduce server load
+requestMultiTimeframeData() =>
+    // FIXED: Properly initialized default arrays
+    float[] monthlyData = array.new_float(3, na)
+    float[] weeklyData = array.new_float(3, na)
+    float[] dailyData = array.new_float(3, na)
+    
+    // Monthly data - only calculate if enabled
+    if showMonthly
+        // FIXED: Use array notation for clarity and to prevent repainting
+        tempMonthly = request.security(syminfo.tickerid, "M", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+        monthlyData := tempMonthly
+
+    // Weekly data - only calculate if enabled
+    if showWeekly
+        tempWeekly = request.security(syminfo.tickerid, "W", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+        weeklyData := tempWeekly
+    
+    // Daily data - always needed
+    tempDaily = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+    dailyData := tempDaily
+    
+    // FIXED: Safer array access with explicit indices
+    [array.get(dailyData, 0), array.get(dailyData, 1), array.get(dailyData, 2),
+     array.get(weeklyData, 0), array.get(weeklyData, 1), array.get(weeklyData, 2),
+     array.get(monthlyData, 0), array.get(monthlyData, 1), array.get(monthlyData, 2)]
+
+// Get all timeframe data efficiently with a single function call
+[dailyHigh, dailyLow, dailyClose, 
+ weeklyHigh, weeklyLow, weeklyClose,
+ monthlyHigh, monthlyLow, monthlyClose] = requestMultiTimeframeData()
+
+// FIXED: Cache pivot calculations to avoid recalculating every bar
+// Properly initialized arrays
+var float[] dailyPivotsCache = array.new_float(0)
+var float[] weeklyPivotsCache = array.new_float(0)
+var float[] monthlyPivotsCache = array.new_float(0)
+
+// FIXED: Function to determine if a pivot is "virgin" (never tested before) - optimized version using ta.barssince()
+isPivotVirgin(pivotLevel, lookbackBars) =>
+    // FIXED: Added comprehensive error checking
+    if na(pivotLevel) or pivotLevel <= 0 or lookbackBars <= 0
+        false
+    else
+        // Use ta.barssince() to find how many bars ago the pivot was last tested
+        // A test occurs if the bar's high is >= pivot and low is <= pivot
+        testedBarsAgo = ta.barssince(high >= pivotLevel and low <= pivotLevel)
+        
+        // A pivot is virgin if:
+        // 1. It was never tested (testedBarsAgo is na)
+        // 2. The last test occurred further back than our lookback period
+        isVirgin = na(testedBarsAgo) or testedBarsAgo >= lookbackBars
+        isVirgin
+
+// FIXED: Update pivot caches on bar confirmation only (performance optimization)
+if barstate.isconfirmed
+    // Check if method has changed since last calculation
+    var string lastMethod = ""
+    needsRecalculation = lastMethod != activePivotMethod
+    lastMethod := activePivotMethod
+    
+    // Daily pivots - always update on confirmed bars
+    if needsRecalculation or array.size(dailyPivotsCache) == 0
+        // FIXED: Added null check before setting
+        newDailyPivots = getPivots(dailyHigh, dailyLow, dailyClose, activePivotMethod)
+        if array.size(newDailyPivots) > 0
+            dailyPivotsCache := newDailyPivots
+    
+    // Weekly pivots
+    if showWeekly and (needsRecalculation or array.size(weeklyPivotsCache) == 0)
+        // FIXED: Added null check before setting
+        newWeeklyPivots = getPivots(weeklyHigh, weeklyLow, weeklyClose, activePivotMethod)
+        if array.size(newWeeklyPivots) > 0
+            weeklyPivotsCache := newWeeklyPivots
+    
+    // Monthly pivots
+    if showMonthly and (needsRecalculation or array.size(monthlyPivotsCache) == 0)
+        // FIXED: Added null check before setting
+        newMonthlyPivots = getPivots(monthlyHigh, monthlyLow, monthlyClose, activePivotMethod)
+        if array.size(newMonthlyPivots) > 0
+            monthlyPivotsCache := newMonthlyPivots
+
+//==================================================================================================
+// SECTION 6: PIVOT ARRAYS AND LABELS WITH IMPROVED MEMORY MANAGEMENT
+//==================================================================================================
+
+// FIXED: Initialize arrays to store pivot levels, labels, and status - reusing arrays
+var float[] pivotLevelsDaily = array.new_float(0)
+var string[] pivotLabelsDaily = array.new_string(0)
+var bool[] pivotIsVirginDaily = array.new_bool(0)
+
+var float[] pivotLevelsWeekly = array.new_float(0)
+var string[] pivotLabelsWeekly = array.new_string(0)
+var bool[] pivotIsVirginWeekly = array.new_bool(0)
+
+var float[] pivotLevelsMonthly = array.new_float(0)
+var string[] pivotLabelsMonthly = array.new_string(0)
+var bool[] pivotIsVirginMonthly = array.new_bool(0)
+
+// FIXED: Cache standard label arrays to avoid recreating them
+var string[] standardLabels = array.from("PP", "R1", "R2", "R3", "S1", "S2", "S3")
+var string[] camarillaLabels = array.from("PP", "H1", "H2", "H3", "H4", "L1", "L2", "L3", "L4")
+var string[] fibonacciLabels = array.from("PP", "R1", "R2", "R3", "S1", "S2", "S3")
+var string[] woodieLabels = array.from("PP", "R1", "R2", "R3", "S1", "S2", "S3")
+
+// FIXED: Initialize pivot labels based on method - now reuses cached arrays
+getDefaultLabels(method) =>
+    string[] result = standardLabels
+    if method == "Camarilla"
+        result := camarillaLabels
+    else if method == "Fibonacci"
+        result := fibonacciLabels
+    else if method == "Woodie"
+        result := woodieLabels
+    else // Standard
+        result := standardLabels
+    result
+
+// FIXED: Generate pivot labels with timeframe prefix - improved bounds checking
+getPivotLabelsWithPrefix(method, prefix) =>
+    string[] baseLabels = getDefaultLabels(method)
+    string[] result = array.new_string(array.size(baseLabels))
+    
+    // FIXED: Added bounds check in loop
+    for i = 0 to array.size(baseLabels) - 1
+        if i < array.size(result)
+            array.set(result, i, prefix + "-" + array.get(baseLabels, i))
+    
+    result
+
+// FIXED: Update arrays for current bar with proper array reuse to reduce memory allocations
+updatePivotArrays() =>
+    // FIXED: Clear existing arrays rather than creating new ones
+    array.clear(pivotLevelsDaily)
+    array.clear(pivotLabelsDaily)
+    array.clear(pivotIsVirginDaily)
+    
+    array.clear(pivotLevelsWeekly)
+    array.clear(pivotLabelsWeekly)
+    array.clear(pivotIsVirginWeekly)
+    
+    array.clear(pivotLevelsMonthly)
+    array.clear(pivotLabelsMonthly)
+    array.clear(pivotIsVirginMonthly)
+    
+    // Create labels
+    string[] dailyLabels = getPivotLabelsWithPrefix(activePivotMethod, "D")
+    string[] weeklyLabels = getPivotLabelsWithPrefix(activePivotMethod, "W")
+    string[] monthlyLabels = getPivotLabelsWithPrefix(activePivotMethod, "M")
+    
+    // Populate daily pivots
+    if showDaily and array.size(dailyPivotsCache) > 0
+        // FIXED: Added proper bound checking in loop
+        for i = 0 to math.min(array.size(dailyPivotsCache), array.size(dailyLabels)) - 1
+            if i < array.size(dailyPivotsCache) and i < array.size(dailyLabels)
+                level = array.get(dailyPivotsCache, i)
+                if not na(level) and level > 0
+                    array.push(pivotLevelsDaily, level)
+                    array.push(pivotLabelsDaily, array.get(dailyLabels, i))
+                    array.push(pivotIsVirginDaily, isPivotVirgin(level, virginPivotLookback))
+
+    // Populate weekly pivots
+    if showWeekly and array.size(weeklyPivotsCache) > 0
+        // FIXED: Added proper bound checking in loop
+        for i = 0 to math.min(array.size(weeklyPivotsCache), array.size(weeklyLabels)) - 1
+            if i < array.size(weeklyPivotsCache) and i < array.size(weeklyLabels)
+                level = array.get(weeklyPivotsCache, i)
+                if not na(level) and level > 0
+                    array.push(pivotLevelsWeekly, level)
+                    array.push(pivotLabelsWeekly, array.get(weeklyLabels, i))
+                    array.push(pivotIsVirginWeekly, isPivotVirgin(level, virginPivotLookback * 5))  // Longer lookback for weekly
+
+    // Populate monthly pivots
+    if showMonthly and array.size(monthlyPivotsCache) > 0
+        // FIXED: Added proper bound checking in loop
+        for i = 0 to math.min(array.size(monthlyPivotsCache), array.size(monthlyLabels)) - 1
+            if i < array.size(monthlyPivotsCache) and i < array.size(monthlyLabels)
+                level = array.get(monthlyPivotsCache, i)
+                if not na(level) and level > 0
+                    array.push(pivotLevelsMonthly, level)
+                    array.push(pivotLabelsMonthly, array.get(monthlyLabels, i))
+                    array.push(pivotIsVirginMonthly, isPivotVirgin(level, virginPivotLookback * 20))  // Much longer lookback for monthly
+
+// FIXED: Update pivot arrays on bar confirmation only
+if barstate.isconfirmed
+    updatePivotArrays()
+
+//==================================================================================================
+// SECTION 7: PIVOT ZONE AND CONFLUENCE DETECTION WITH OPTIMIZATIONS
+//==================================================================================================
+
+// FIXED: Check if price is near a pivot level with improved error handling
+isNearPivot(price, pivotLevel, width) =>
+    // FIXED: Improved error handling and percentage calculation
+    if na(price) or na(pivotLevel) or pivotLevel <= 0 or na(width) or width <= 0
+        false
+    else
+        percentWidth = pivotLevel * (width / 100)
+        price >= pivotLevel - percentWidth and price <= pivotLevel + percentWidth
+
+// FIXED: Function to predict potential volatility expansion after pivot test
+predictVolExpansion(is_virgin_pivot, confluence_count, current_atr) =>
+    // FIXED: Added comprehensive error checking
+    if na(current_atr) or current_atr <= 0 or na(is_virgin_pivot) or na(confluence_count)
+        current_atr
+    else
+        // Base expansion factor
+        expansion_factor = 1.0
+        
+        // Adjust based on pivot characteristics
+        if is_virgin_pivot
+            expansion_factor := expansion_factor * 1.5  // 50% more volatility expected
+        
+        // Adjust based on confluence strength
+        if confluence_count > 0
+            // FIXED: Corrected math operation for confluence adjustment
+            expansion_factor := expansion_factor * (1.0 + 0.1 * math.min(confluence_count, 5))
+        
+        // Predict expanded ATR
+        predicted_atr = current_atr * expansion_factor
+        
+        predicted_atr
+
+// FIXED: Detect time-based patterns for pivot testing with proper error handling
+isTimeBasedPivotTest() =>
+    // FIXED: Added proper time function error handling
+    int currentHour = na(time) ? 0 : hour(time)
+    int currentMinute = na(time) ? 0 : minute(time)
+    int currentDay = na(time) ? 0 : dayofweek(time)
+    
+    // Check for common pivot testing times for Nifty 50
+    // Market open test (9:15-9:45 AM IST)
+    market_open_test = currentHour == 9 and currentMinute >= 15 and currentMinute <= 45
+    
+    // End of day test (2:30-3:30 PM IST)
+    end_of_day_test = currentHour >= 14 and currentHour <= 15 and (currentHour < 15 or currentMinute <= 30)
+    
+    // Thursday expiry effect (increased volatility on expiry day)
+    thursday_expiry = currentDay == dayofweek.thursday
+    
+    market_open_test or end_of_day_test or thursday_expiry
+
+// FIXED: Optimized function to find confluence zones where multiple pivots align with better performance
+findConfluenceZones() =>
+    // FIXED: Initialize return arrays with proper size and type
+    float[] allPivotLevels = array.new_float(0)
+    string[] allPivotLabels = array.new_string(0)
+    string[] allPivotTimeframes = array.new_string(0)
+    bool[] allPivotVirgin = array.new_bool(0)
+    
+    // FIXED: Estimate total number of pivots from all timeframes for better memory allocation
+    dailySize = array.size(pivotLevelsDaily)
+    weeklySize = array.size(pivotLevelsWeekly)
+    monthlySize = array.size(pivotLevelsMonthly)
+    totalPivots = dailySize + weeklySize + monthlySize
+    
+    // Skip calculation if we don't have enough pivots
+    if totalPivots < minConfluenceForSignal
+        [array.new_float(0), array.new_string(0), array.new_int(0), array.new_string(0), array.new_bool(0)]
+    
+    // FIXED: Pre-allocate arrays with estimated capacity for better performance
+    allPivotLevels := array.new_float(totalPivots)
+    allPivotLabels := array.new_string(totalPivots)
+    allPivotTimeframes := array.new_string(totalPivots)
+    allPivotVirgin := array.new_bool(totalPivots)
+    
+    // Track actual number of valid pivots
+    pivotCount = 0
+    
+    // FIXED: Added comprehensive bound checking throughout collection loops
+    
+    // Collect daily pivots
+    if showDaily
+        for i = 0 to dailySize - 1
+            if i < array.size(pivotLabelsDaily) and i < array.size(pivotIsVirginDaily) and i < array.size(pivotLevelsDaily)
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0 and pivotCount < totalPivots
+                    array.set(allPivotLevels, pivotCount, level)
+                    array.set(allPivotLabels, pivotCount, array.get(pivotLabelsDaily, i))
+                    array.set(allPivotTimeframes, pivotCount, "D")
+                    array.set(allPivotVirgin, pivotCount, array.get(pivotIsVirginDaily, i))
+                    pivotCount += 1
+    
+    // Collect weekly pivots
+    if showWeekly
+        for i = 0 to weeklySize - 1
+            if i < array.size(pivotLabelsWeekly) and i < array.size(pivotIsVirginWeekly) and i < array.size(pivotLevelsWeekly)
+                level = array.get(pivotLevelsWeekly, i)
+                if not na(level) and level > 0 and pivotCount < totalPivots
+                    array.set(allPivotLevels, pivotCount, level)
+                    array.set(allPivotLabels, pivotCount, array.get(pivotLabelsWeekly, i))
+                    array.set(allPivotTimeframes, pivotCount, "W")
+                    array.set(allPivotVirgin, pivotCount, array.get(pivotIsVirginWeekly, i))
+                    pivotCount += 1
+    
+    // Collect monthly pivots
+    if showMonthly
+        for i = 0 to monthlySize - 1
+            if i < array.size(pivotLabelsMonthly) and i < array.size(pivotIsVirginMonthly) and i < array.size(pivotLevelsMonthly)
+                level = array.get(pivotLevelsMonthly, i)
+                if not na(level) and level > 0 and pivotCount < totalPivots
+                    array.set(allPivotLevels, pivotCount, level)
+                    array.set(allPivotLabels, pivotCount, array.get(pivotLabelsMonthly, i))
+                    array.set(allPivotTimeframes, pivotCount, "M")
+                    array.set(allPivotVirgin, pivotCount, array.get(pivotIsVirginMonthly, i))
+                    pivotCount += 1
+    
+    // FIXED: Resize arrays to actual count of valid pivots
+    if pivotCount < totalPivots
+        array.resize(allPivotLevels, pivotCount)
+        array.resize(allPivotLabels, pivotCount)
+        array.resize(allPivotTimeframes, pivotCount)
+        array.resize(allPivotVirgin, pivotCount)
+    
+    // FIXED: Estimate maximum number of confluence zones
+    maxConfluences = math.min(pivotCount, 10)
+    
+    // FIXED: Initialize confluence arrays with estimated capacity
+    confluenceZones = array.new_float(maxConfluences)
+    confluenceLabels = array.new_string(maxConfluences)
+    confluenceCounts = array.new_int(maxConfluences)
+    confluenceTypes = array.new_string(maxConfluences)
+    confluenceVirgin = array.new_bool(maxConfluences)
+    
+    confluenceCount = 0
+    
+    // Find confluence zones with optimized processing
+    if pivotCount > 0
+        // FIXED: Track processed pivots to avoid duplication
+        processedPivots = array.new_bool(pivotCount, false)
+        
+        for i = 0 to pivotCount - 1
+            // Skip already processed pivots
+            if array.get(processedPivots, i)
+                continue
+            
+            level = array.get(allPivotLevels, i)
+            label = array.get(allPivotLabels, i)
+            timeframe = array.get(allPivotTimeframes, i)
+            isVirgin = array.get(allPivotVirgin, i)
+            
+            // Skip invalid levels
+            if na(level) or level <= 0
+                continue
+            
+            // Mark this pivot as processed
+            array.set(processedPivots, i, true)
+            
+            // Initialize count and labels for this potential confluence
+            count = 1  // Start with 1 (itself)
+            confluenceLabelsTemp = label
+            
+            // FIXED: Added safeguard for label length and proper substring extraction
+            firstChar = label.length() >= 4 ? str.substring(label, 2, 3) : "P" // Get first char after timeframe prefix
+            
+            confluenceTypesTemp = firstChar == "S" or firstChar == "L" ? "S" : 
+                                  firstChar == "R" or firstChar == "H" ? "R" : "P"
+            
+            // Look for other pivots that are confluent with this one
+            for j = i + 1 to pivotCount - 1
+                // Skip already processed pivots
+                if j >= array.size(processedPivots) or array.get(processedPivots, j)
+                    continue
+                
+                // FIXED: Added proper bounds checking for all array accesses
+                if j < array.size(allPivotLevels)
+                    compareLevel = array.get(allPivotLevels, j)
+                    
+                    // Skip invalid levels
+                    if na(compareLevel) or compareLevel <= 0
+                        continue
+                    
+                    // FIXED: Quick distance check before more expensive isNearPivot call
+                    levelDiff = math.abs(level - compareLevel)
+                    quickThreshold = level * (confluenceThreshold / 100)
+                    
+                    if levelDiff <= quickThreshold and j < array.size(allPivotLabels) and j < array.size(allPivotTimeframes)
+                        compareLabel = array.get(allPivotLabels, j)
+                        compareTimeframe = array.get(allPivotTimeframes, j)
+                        
+                        count += 1
+                        confluenceLabelsTemp := confluenceLabelsTemp + "+" + compareLabel
+                        
+                        // If from different timeframe, this is more significant
+                        if timeframe != compareTimeframe
+                            count += 1
+                        
+                        // Mark this pivot as processed
+                        array.set(processedPivots, j, true)
+            
+            // If we found enough confluent pivots, add to results
+            if count >= minConfluenceForSignal and confluenceCount < maxConfluences
+                array.set(confluenceZones, confluenceCount, level)
+                array.set(confluenceLabels, confluenceCount, confluenceLabelsTemp)
+                array.set(confluenceCounts, confluenceCount, count)
+                array.set(confluenceTypes, confluenceCount, confluenceTypesTemp)
+                array.set(confluenceVirgin, confluenceCount, isVirgin)
+                confluenceCount += 1
+    
+    // FIXED: Resize confluence arrays to actual count
+    if confluenceCount < maxConfluences
+        array.resize(confluenceZones, confluenceCount)
+        array.resize(confluenceLabels, confluenceCount)
+        array.resize(confluenceCounts, confluenceCount)
+        array.resize(confluenceTypes, confluenceCount)
+        array.resize(confluenceVirgin, confluenceCount)
+    
+    [confluenceZones, confluenceLabels, confluenceCounts, confluenceTypes, confluenceVirgin]
+
+// FIXED: Cache for confluence zones (updated only on bar confirmation)
+var float[] confluenceZones = array.new_float(0)
+var string[] confluenceLabels = array.new_string(0)
+var int[] confluenceCounts = array.new_int(0)
+var string[] confluenceTypes = array.new_string(0)
+var bool[] confluenceVirgin = array.new_bool(0)
+
+// FIXED: Only recalculate confluence on bar confirmation (optimization)
+if barstate.isconfirmed
+    [newConfluenceZones, newConfluenceLabels, newConfluenceCounts, newConfluenceTypes, newConfluenceVirgin] = findConfluenceZones()
+    
+    // FIXED: Replace confluences with new values - reusing arrays
+    array.clear(confluenceZones)
+    array.clear(confluenceLabels)
+    array.clear(confluenceCounts)
+    array.clear(confluenceTypes)
+    array.clear(confluenceVirgin)
+    
+    // Copy new values to cached arrays with proper bounds checking
+    // FIXED: Added bounds checking for all array operations
+    for i = 0 to array.size(newConfluenceZones) - 1
+        if i < array.size(newConfluenceLabels) and i < array.size(newConfluenceCounts) and 
+           i < array.size(newConfluenceTypes) and i < array.size(newConfluenceVirgin)
+            array.push(confluenceZones, array.get(newConfluenceZones, i))
+            array.push(confluenceLabels, array.get(newConfluenceLabels, i))
+            array.push(confluenceCounts, array.get(newConfluenceCounts, i))
+            array.push(confluenceTypes, array.get(newConfluenceTypes, i))
+            array.push(confluenceVirgin, array.get(newConfluenceVirgin, i))
+//==================================================================================================
+// SECTION 8: ENHANCED SIGNAL FILTERING WITH MULTI-FACTOR APPROACH
+//==================================================================================================
+
+// FIXED: Volume filter with improved error handling
+volumeFilter(current_volume, avg_volume, pivot_type) =>
+    // FIXED: Added comprehensive error handling
+    if not enableVolumeFilter or na(current_volume) or na(avg_volume) or avg_volume <= 0 or na(pivot_type)
+        true
+    else
+        // Base threshold varies by pivot type - more important levels need more volume
+        threshold = 0.0
+        // FIXED: Added proper string handling with contains
+        if str.contains(pivot_type, "PP") or str.contains(pivot_type, "R1") or str.contains(pivot_type, "S1")
+            threshold := adaptedVolumeThreshold
+        else
+            threshold := adaptedVolumeThreshold + 0.3
+        current_volume > avg_volume * threshold
+
+// FIXED: Candlestick pattern filter with improved error handling
+patternFilter(signal_type) =>
+    // FIXED: Added check for invalid signal type
+    if not enablePatternFilter or na(signal_type) or (signal_type != "bullish" and signal_type != "bearish")
+        true
+    else
+        if signal_type == "bullish"
+            // Bullish patterns
+            hammer = low < open and close > open and (high - close) < (close - low) / 2 and (close - open) < (close - low) / 3
+            bullish_engulfing = close > open and close > high[1] and open < low[1]
+            morning_star = close[2] < open[2] and math.abs(close[1] - open[1]) < math.abs(close[2] - open[2])/3 and close > open and close > close[1] + math.abs(close[2] - open[2])/3
+            hammer or bullish_engulfing or morning_star
+        else
+            // Bearish patterns
+            shooting_star = high > close and close < open and (high - close) > (open - low) * 2 and (open - close) < (high - open) / 3
+            bearish_engulfing = close < open and close < low[1] and open > high[1]
+            evening_star = close[2] > open[2] and math.abs(close[1] - open[1]) < math.abs(close[2] - open[2])/3 and close < open and close < close[1] - math.abs(close[2] - open[2])/3
+            shooting_star or bearish_engulfing or evening_star
+
+// FIXED: RSI filter with improved error handling
+rsiFilter(rsi_value, signal_type) =>
+    // FIXED: Added check for invalid signal type
+    if not enableRsiFilter or na(rsi_value) or na(signal_type) or (signal_type != "bullish" and signal_type != "bearish")
+        true
+    else
+        if signal_type == "bullish"
+            rsi_value < rsiThreshold and rsi_value > rsi_value[1]  // Oversold and turning up
+        else
+            rsi_value > (100 - rsiThreshold) and rsi_value < rsi_value[1]  // Overbought and turning down
+
+// Pre-calculate common indicators used in filters for better performance
+rsiValue = ta.rsi(close, 14)   // RSI value
+
+// FIXED: Enhanced multi-factor filter with weighted scoring and improved error handling
+multiFactorFilterScore(signal_type, pivot_type, confluence_strength, is_virgin_pivot) =>
+    // FIXED: Added comprehensive error checking for parameters
+    if na(signal_type) or na(pivot_type) or na(confluence_strength) or na(is_virgin_pivot)
+        [0, "low"]
+    else
+        // Initialize score components
+        volume_score = volumeFilter(smartVolume, volumeMA, pivot_type) ? 30 : 0
+        pattern_score = patternFilter(signal_type) ? 25 : 0
+        rsi_score = rsiFilter(rsiValue, signal_type) ? 15 : 0
+        conf_score = math.min(confluence_strength, 3) * 5  // 0-15 points based on strength
+        virgin_score = is_virgin_pivot ? 10 : 0
+        volume_spike_score = isVolumeSpike ? 10 : 0  // Additional score for volume spike
+        
+        // FIXED: Improved pivot type scoring with safer string handling
+        pivot_score = 2.5  // Default score for other levels
+        if str.contains(pivot_type, "PP")
+            pivot_score := 5  // Central pivot point
+        else if (str.contains(pivot_type, "S1") or str.contains(pivot_type, "R1") or 
+                str.contains(pivot_type, "H3") or str.contains(pivot_type, "L3"))
+            pivot_score := 4  // Key levels
+        
+        // Calculate total score (0-100)
+        total_score = volume_score + pattern_score + rsi_score + conf_score + virgin_score + pivot_score + volume_spike_score
+        
+        // Ensure score is within valid range 0-100
+        total_score := math.max(0, math.min(100, total_score))
+        
+        // Determine signal quality
+        signal_quality = total_score >= 70 ? "high" : total_score >= 50 ? "medium" : "low"
+        
+        [total_score, signal_quality]
+
+//==================================================================================================
+// SECTION 9: ENHANCED STRATEGY SIGNAL CALCULATION WITH VIRGIN PIVOT DETECTION
+//==================================================================================================
+
+// FIXED: Optimized signal detection function that handles both bounce and breakout signals
+calcSignal(signal_type) =>
+    // FIXED: Properly initialize return values with default values
+    signal = "None"
+    level = 0.0
+    strength = 0
+    pivot_type = ""
+    is_virgin = false
+    signal_score = 0
+    predicted_vol = na(atrValue) ? 0.0 : atrValue
+    
+    // FIXED: Added validation for signal_type parameter
+    if na(signal_type) or (signal_type != "bounce" and signal_type != "breakout")
+        return [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+    
+    // FIXED: Quick check for price near pivots - if price is not near any pivot and not the last bar, exit early
+    // This optimization significantly reduces computation when there's no signal potential
+    if (array.size(pivotLevelsDaily) > 0 or array.size(pivotLevelsWeekly) > 0) and not barstate.islast
+        nearPivot = false
+        
+        // Check a few daily pivots
+        for i = 0 to math.min(array.size(pivotLevelsDaily), 3) - 1
+            if i < array.size(pivotLevelsDaily)
+                pivotLevel = array.get(pivotLevelsDaily, i)
+                if not na(pivotLevel) and pivotLevel > 0 and isNearPivot(close, pivotLevel, pivotZoneWidth * 4)
+                    nearPivot := true
+                    break
+        
+        // Check a few weekly pivots if still not near
+        if not nearPivot and showWeekly
+            for i = 0 to math.min(array.size(pivotLevelsWeekly), 3) - 1
+                if i < array.size(pivotLevelsWeekly)
+                    pivotLevel = array.get(pivotLevelsWeekly, i)
+                    if not na(pivotLevel) and pivotLevel > 0 and isNearPivot(close, pivotLevel, pivotZoneWidth * 4)
+                        nearPivot := true
+                        break
+        
+        // If not near any pivot, exit early
+        if not nearPivot
+            return [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+    
+    // FIXED: Early exit if we don't have necessary data
+    if array.size(pivotLevelsDaily) == 0 and array.size(pivotLevelsWeekly) == 0
+        return [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+    
+    // Check daily pivots first
+    if array.size(pivotLevelsDaily) > 0
+        // FIXED: Added comprehensive bounds checking in pivots loop
+        for i = 0 to array.size(pivotLevelsDaily) - 1
+            if i >= array.size(pivotLabelsDaily) or i >= array.size(pivotIsVirginDaily) or i >= array.size(pivotLevelsDaily)
+                continue
+                
+            currentLevel = array.get(pivotLevelsDaily, i)
+            currentLabel = array.get(pivotLabelsDaily, i)
+            currentVirgin = array.get(pivotIsVirginDaily, i)
+            
+            // Skip invalid levels
+            if na(currentLevel) or currentLevel <= 0 or na(currentLabel)
+                continue
+            
+            if signal_type == "bounce"
+                // Bullish bounce from support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L")) and 
+                   low <= currentLevel and close > currentLevel and low[1] > currentLevel
+                    
+                    // Check for confirmation (2-candle pattern)
+                    if low[1] > currentLevel  // Previous candle didn't touch support
+                        // Get signal score using multi-factor filter
+                        confluenceStrength = 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and 
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        confluenceStrength := math.min(confCount, 3)
+                                        break
+                        
+                        [score, quality] = multiFactorFilterScore("bullish", currentLabel, confluenceStrength, currentVirgin)
+                        
+                        // Check if score meets minimum threshold
+                        if score >= minSignalScore
+                            signal := "Buy"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := confluenceStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, confluenceStrength, atrValue)
+                            break
+                
+                // Bearish bounce from resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H")) and 
+                   high >= currentLevel and close < currentLevel and high[1] < currentLevel
+                    
+                    // Check for confirmation (2-candle pattern)
+                    if high[1] < currentLevel  // Previous candle didn't touch resistance
+                        // Get signal score using multi-factor filter
+                        confluenceStrength = 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        confluenceStrength := math.min(confCount, 3)
+                                        break
+                        
+                        [score, quality] = multiFactorFilterScore("bearish", currentLabel, confluenceStrength, currentVirgin)
+                        
+                        // Check if score meets minimum threshold
+                        if score >= minSignalScore
+                            signal := "Sell"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := confluenceStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, confluenceStrength, atrValue)
+                            break
+            
+            else if signal_type == "breakout"
+                // Bullish breakout above resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H") or currentLabel == "D-PP") and 
+                   close > currentLevel and close[1] <= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close > open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        // Initial strength assessment
+                        breakoutStrength = 1
+                        
+                        // Add strength if breakout volume is high or is a spike
+                        if smartVolume > volumeMA * 1.5 or isVolumeSpike
+                            breakoutStrength := breakoutStrength + 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        breakoutStrength := math.min(breakoutStrength + 1, 3)
+                                        break
+                        
+                        // Calculate score
+                        [score, quality] = multiFactorFilterScore("bullish", currentLabel, breakoutStrength, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Buy"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := breakoutStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, breakoutStrength, atrValue)
+                            break
+                
+                // Bearish breakout below support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L") or currentLabel == "D-PP") and 
+                   close < currentLevel and close[1] >= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close < open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        // Initial strength assessment
+                        breakoutStrength = 1
+                        
+                        // Add strength if breakout volume is high or is a spike
+                        if smartVolume > volumeMA * 1.5 or isVolumeSpike
+                            breakoutStrength := breakoutStrength + 1
+                        
+                        // Check for confluence with other pivots
+                        if array.size(confluenceZones) > 0
+                            // FIXED: Added proper bounds checking for confluence loop
+                            for j = 0 to array.size(confluenceZones) - 1
+                                if j < array.size(confluenceCounts) and j < array.size(confluenceZones)
+                                    confLevel = array.get(confluenceZones, j)
+                                    confCount = array.get(confluenceCounts, j)
+                                    
+                                    if not na(confLevel) and confLevel > 0 and
+                                       isNearPivot(currentLevel, confLevel, confluenceThreshold)
+                                        breakoutStrength := math.min(breakoutStrength + 1, 3)
+                                        break
+                        
+                        // Calculate score
+                        [score, quality] = multiFactorFilterScore("bearish", currentLabel, breakoutStrength, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Sell"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := breakoutStrength
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, breakoutStrength, atrValue)
+                            break
+    
+    // If no signal from daily pivots, check weekly pivots (they take precedence)
+    if signal == "None" and showWeekly and array.size(pivotLevelsWeekly) > 0
+        // FIXED: Added comprehensive bounds checking in weekly pivots loop
+        for i = 0 to array.size(pivotLevelsWeekly) - 1
+            if i >= array.size(pivotLabelsWeekly) or i >= array.size(pivotIsVirginWeekly) or i >= array.size(pivotLevelsWeekly)
+                continue
+                
+            currentLevel = array.get(pivotLevelsWeekly, i)
+            currentLabel = array.get(pivotLabelsWeekly, i)
+            currentVirgin = array.get(pivotIsVirginWeekly, i)
+            
+            // Skip invalid levels
+            if na(currentLevel) or currentLevel <= 0 or na(currentLabel)
+                continue
+            
+            if signal_type == "bounce"
+                // Bullish bounce from weekly support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L")) and 
+                   low <= currentLevel and close > currentLevel and low[1] > currentLevel
+                    
+                    [score, quality] = multiFactorFilterScore("bullish", currentLabel, 2, currentVirgin)
+                    
+                    // Check if score meets minimum threshold
+                    if score >= minSignalScore
+                        signal := "Buy"
+                        level := currentLevel
+                        pivot_type := currentLabel
+                        strength := 2  // Start with higher strength for weekly pivot
+                        is_virgin := currentVirgin
+                        signal_score := score
+                        predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                        break
+                
+                // Bearish bounce from weekly resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H")) and 
+                   high >= currentLevel and close < currentLevel and high[1] < currentLevel
+                    
+                    [score, quality] = multiFactorFilterScore("bearish", currentLabel, 2, currentVirgin)
+                    
+                    // Check if score meets minimum threshold
+                    if score >= minSignalScore
+                        signal := "Sell"
+                        level := currentLevel
+                        pivot_type := currentLabel
+                        strength := 2  // Start with higher strength for weekly pivot
+                        is_virgin := currentVirgin
+                        signal_score := score
+                        predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                        break
+            
+            else if signal_type == "breakout" 
+                // Weekly breakout logic is similar to daily
+                // Bullish breakout above resistance
+                if (str.contains(currentLabel, "R") or str.contains(currentLabel, "H") or currentLabel == "W-PP") and 
+                   close > currentLevel and close[1] <= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close > open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        [score, quality] = multiFactorFilterScore("bullish", currentLabel, 2, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Buy"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := 2
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                            break
+                
+                // Bearish breakout below support
+                if (str.contains(currentLabel, "S") or str.contains(currentLabel, "L") or currentLabel == "W-PP") and 
+                   close < currentLevel and close[1] >= currentLevel and smartVolume > volumeMA
+                    
+                    // Additional confirmation for breakouts
+                    if close < open and (high - low) > 0 and math.abs(close - open) / (high - low) > 0.5
+                        [score, quality] = multiFactorFilterScore("bearish", currentLabel, 2, currentVirgin)
+                        
+                        if score >= minSignalScore
+                            signal := "Sell"
+                            level := currentLevel
+                            pivot_type := currentLabel
+                            strength := 2
+                            is_virgin := currentVirgin
+                            signal_score := score
+                            predicted_vol := predictVolExpansion(currentVirgin, 2, atrValue)
+                            break
+    
+    // Check for time-based patterns to enhance signal strength
+    if signal != "None" and isTimeBasedPivotTest()
+        strength := math.min(strength + 1, 3)  // Increase strength if at common testing time
+    
+    [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+
+// FIXED: Range-Based Strategy Signals: Detects price consolidation between pivots for iron condor/butterfly setups
+calcRangeSignal() =>
+    // FIXED: Properly initialize return values
+    signal = "None"
+    upperLevel = 0.0
+    lowerLevel = 0.0
+    strength = 0
+    signal_score = 0
+    
+    // FIXED: Skip calculation if not appropriate - early exit optimization
+    // Range strategies work best in low to normal volatility and with enough pivot data
+    if highVolRegime or array.size(pivotLevelsDaily) < 2
+        return [signal, upperLevel, lowerLevel, strength, signal_score]
+    
+    // Quick ADX check - exit early if trending market
+    if adxValue > 30  // Strong trend - not suitable for range strategy
+        return [signal, upperLevel, lowerLevel, strength, signal_score]
+        
+    // Try to find central pivot point
+    centralPivot = 0.0
+    // FIXED: Added proper bounds checking in pivot search loop
+    for i = 0 to array.size(pivotLevelsDaily) - 1
+        if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily) and 
+           array.get(pivotLabelsDaily, i) == "D-PP"
+            centralPivot := array.get(pivotLevelsDaily, i)
+            break
+    
+    // Exit early if no central pivot or price not near central pivot
+    if na(centralPivot) or centralPivot <= 0 or close <= 0 or 
+       close < centralPivot * 0.98 or close > centralPivot * 1.02
+        return [signal, upperLevel, lowerLevel, strength, signal_score]
+    
+    // Find potential resistance level
+    // FIXED: Added proper bounds checking in resistance level search
+    for i = 0 to array.size(pivotLevelsDaily) - 1
+        if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily)
+            currentLabel = array.get(pivotLabelsDaily, i)
+            if str.contains(currentLabel, "R") or str.contains(currentLabel, "H")
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0
+                    upperLevel := level
+                    break
+    
+    // Find potential support level
+    // FIXED: Added proper bounds checking in support level search
+    for i = 0 to array.size(pivotLevelsDaily) - 1
+        if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily)
+            currentLabel = array.get(pivotLabelsDaily, i)
+            if str.contains(currentLabel, "S") or str.contains(currentLabel, "L")
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0
+                    lowerLevel := level
+                    break
+    
+    // If we found valid upper and lower bounds
+    if upperLevel > 0 and lowerLevel > 0
+        // Confirm range-bound behavior with ADX
+        rangeStrength = 0
+        
+        // Check ADX
+        if adxValue < 20  // Low ADX confirms range-bound market
+            rangeStrength := 1
+            
+            // Add strength if volatility is low
+            if lowVolRegime
+                rangeStrength := rangeStrength + 1
+            
+            // Add strength if price has been oscillating between these levels
+            priceOscillating = (high[1] >= upperLevel * 0.95 or high[2] >= upperLevel * 0.95) and
+                              (low[1] <= lowerLevel * 1.05 or low[2] <= lowerLevel * 1.05)
+            if priceOscillating
+                rangeStrength := rangeStrength + 1
+        
+        // Custom score for range setups
+        score = 0
+        
+        // ADX component (0-40 points)
+        adx_score = math.max(0, 40 - adxValue)
+        
+        // Volatility component (0-30 points)
+        vol_score = lowVolRegime ? 30 : normalVolRegime ? 20 : 0
+        
+        // Price location component (0-20 points)
+        central_pivot_distance = math.abs(close - centralPivot) / centralPivot * 100
+        price_score = central_pivot_distance < 0.5 ? 20 : 
+                     central_pivot_distance < 1.0 ? 15 :
+                     central_pivot_distance < 1.5 ? 10 : 5
+        
+        // Oscillation component (0-10 points)
+        osc_score = priceOscillating ? 10 : 0
+        
+        // Volume stability component (0-10 points)
+        vol_stable = not isVolumeSpike ? 10 : 0
+        
+        // Final score
+        range_score = adx_score + vol_score + price_score + osc_score + vol_stable
+        
+        if rangeStrength >= 1 and range_score >= minSignalScore
+            signal := "Range"
+            strength := rangeStrength
+            signal_score := range_score
+    
+    [signal, upperLevel, lowerLevel, strength, signal_score]
+
+// Signal variables for current bar with expanded fields
+var bounceSignal = "None"
+var float bounceLevel = 0.0
+var int bounceStrength = 0
+var string bouncePivotType = ""
+var bool bounceIsVirgin = false
+var int bounceScore = 0
+var float bouncePredictedVol = 0.0
+
+var breakoutSignal = "None"
+var float breakoutLevel = 0.0
+var int breakoutStrength = 0
+var string breakoutPivotType = ""
+var bool breakoutIsVirgin = false
+var int breakoutScore = 0
+var float breakoutPredictedVol = 0.0
+
+var rangeSignal = "None"
+var float rangeUpperLevel = 0.0
+var float rangeLowerLevel = 0.0
+var int rangeStrength = 0
+var int rangeScore = 0
+
+// FIXED: Only calculate signals on confirmed bars to avoid repainting
+if barstate.isconfirmed
+    // Calculate bounce signals
+    if showPivotBounceSignals
+        // FIXED: Added error handling for signal calculation
+        [newBounceSignal, newBounceLevel, newBounceStrength, newBouncePivotType, newBounceIsVirgin, newBounceScore, newBouncePredictedVol] = calcSignal("bounce")
+        if not na(newBounceSignal) and not na(newBounceLevel) and not na(newBounceStrength) and not na(newBouncePivotType) and 
+           not na(newBounceIsVirgin) and not na(newBounceScore) and not na(newBouncePredictedVol)
+            bounceSignal := newBounceSignal
+            bounceLevel := newBounceLevel
+            bounceStrength := newBounceStrength
+            bouncePivotType := newBouncePivotType
+            bounceIsVirgin := newBounceIsVirgin
+            bounceScore := newBounceScore
+            bouncePredictedVol := newBouncePredictedVol
+    
+    // Calculate breakout signals
+    if showPivotBreakoutSignals
+        // FIXED: Added error handling for signal calculation
+        [newBreakoutSignal, newBreakoutLevel, newBreakoutStrength, newBreakoutPivotType, newBreakoutIsVirgin, newBreakoutScore, newBreakoutPredictedVol] = calcSignal("breakout")
+        if not na(newBreakoutSignal) and not na(newBreakoutLevel) and not na(newBreakoutStrength) and not na(newBreakoutPivotType) and 
+           not na(newBreakoutIsVirgin) and not na(newBreakoutScore) and not na(newBreakoutPredictedVol)
+            breakoutSignal := newBreakoutSignal
+            breakoutLevel := newBreakoutLevel
+            breakoutStrength := newBreakoutStrength
+            breakoutPivotType := newBreakoutPivotType
+            breakoutIsVirgin := newBreakoutIsVirgin
+            breakoutScore := newBreakoutScore
+            breakoutPredictedVol := newBreakoutPredictedVol
+    
+    // Calculate range signals
+    if showRangeSignals
+        // FIXED: Added error handling for range signal calculation
+        [newRangeSignal, newRangeUpperLevel, newRangeLowerLevel, newRangeStrength, newRangeScore] = calcRangeSignal()
+        if not na(newRangeSignal) and not na(newRangeUpperLevel) and not na(newRangeLowerLevel) and not na(newRangeStrength) and not na(newRangeScore)
+            rangeSignal := newRangeSignal
+            rangeUpperLevel := newRangeUpperLevel
+            rangeLowerLevel := newRangeLowerLevel
+            rangeStrength := newRangeStrength
+            rangeScore := newRangeScore
+//==================================================================================================
+// SECTION 10: OPTIONS STRATEGY SELECTION AND MANAGEMENT
+//==================================================================================================
+
+// FIXED: Delta management at pivot levels
+getDeltaExposure(price, pivot_level, direction) =>
+    // FIXED: Added comprehensive error handling
+    if na(price) or na(pivot_level) or pivot_level <= 0 or na(direction)
+        1.0  // Default exposure
+    else
+        // Default exposure
+        float exposure = 1.0
+        
+        // Calculate normalized distance to pivot
+        distance = math.abs(price - pivot_level) / price * 100
+        
+        // Adjust delta exposure based on proximity
+        if distance < 0.3
+            // Very close to pivot - reduce delta exposure
+            exposure := 0.5  // Reduce by 50%
+        else if distance < 1.0
+            // Moderately close - slightly reduce delta
+            exposure := 0.8  // Reduce by 20%
+        else
+            // Far from pivot - normal delta exposure
+            exposure := 1.0
+        
+        // Adjust based on direction
+        if direction == "approaching"
+            exposure := exposure * 0.8  // Further reduce when approaching pivots
+        
+        exposure
+
+// FIXED: Advanced options strategy selection with early exits
+getAdvancedOptionStrategy(signal_type, vol_regime, strength, is_virgin, predicted_volatility, days_to_expiry, distance_to_next_pivot) =>
+    // FIXED: Added comprehensive error handling for all parameters
+    if na(signal_type) or signal_type == "None" or na(vol_regime) or na(strength) or na(is_virgin) or 
+       na(predicted_volatility) or predicted_volatility <= 0 or na(days_to_expiry) or na(distance_to_next_pivot)
+        "None"
+    else
+        // Calculate key decision factors once
+        float rel_distance = na(distance_to_next_pivot) or distance_to_next_pivot <= 0 or close <= 0 ? 
+                           0.0 : (distance_to_next_pivot / close) * 100
+        
+        float vol_edge = atrValue > 0 ? predicted_volatility / atrValue : 1.0
+        bool significant_vol_expansion = vol_edge > 1.3
+        
+        bool strong_setup = strength >= 2 or (is_virgin and significant_vol_expansion) or rel_distance > 3.0
+        
+        // Decision tree based on signal type and volatility regime
+        if signal_type == "Buy"
+            if vol_regime == "EXTREME"
+                "Bull Call Spread"
+            else if vol_regime == "HIGH"
+                strong_setup ? "Long Call" : "Bull Call Spread"
+            else if vol_regime == "LOW"
+                if strong_setup
+                    "Bull Call Spread"
+                else if days_to_expiry <= 10
+                    "Cash-Secured Put"
+                else
+                    "Cash-Secured Put"
+            else  // NORMAL
+                strong_setup ? "Long Call" : "Bull Call Spread"
+        else if signal_type == "Sell"
+            if vol_regime == "EXTREME"
+                "Bear Put Spread"
+            else if vol_regime == "HIGH"
+                strong_setup ? "Long Put" : "Bear Put Spread"
+            else if vol_regime == "LOW"
+                if strong_setup
+                    "Bear Put Spread"
+                else if days_to_expiry <= 10
+                    "Covered Call"
+                else
+                    "Covered Call"
+            else  // NORMAL
+                strong_setup ? "Long Put" : "Bear Put Spread"
+        else if signal_type == "Range"
+            if days_to_expiry < 14
+                "Iron Butterfly"
+            else if vol_regime == "LOW"
+                "Iron Condor"
+            else
+                "Iron Butterfly"
+        else
+            "None"
+
+// FIXED: Calculate stop loss level based on signal type, reference level, and ATR
+// For bounces, reference is pivot_level. For breakouts, reference is breakout bar low/high.
+getStopLoss(signal_type, signal_origin, reference_level, atr_value) =>
+    // FIXED: Added comprehensive error handling
+    if na(signal_type) or (signal_type != "Buy" and signal_type != "Sell") or na(signal_origin) or na(reference_level) or reference_level <= 0
+        0.0  // Return default on error
+    else
+        float result = 0.0
+        float safe_atr = na(atr_value) or atr_value <= 0 ? ta.atr(14) : atr_value // Ensure valid ATR
+
+        if useFixedStopLoss
+            // Fixed stop based on the reference level (pivot for bounce, entry for breakout)
+            if signal_type == "Buy"
+                result := reference_level * (1 - fixedStopLossPercent / 100)
+            else if signal_type == "Sell"
+                result := reference_level * (1 + fixedStopLossPercent / 100)
+        else
+            // ATR-based stop
+            if signal_origin == "bounce"
+                // For bounces, place stop beyond the pivot level
+                if signal_type == "Buy"
+                    result := reference_level - (safe_atr * adaptedStopLossMultiplier)
+                else if signal_type == "Sell"
+                    result := reference_level + (safe_atr * adaptedStopLossMultiplier)
+            else // signal_origin == "breakout"
+                // For breakouts, place stop beyond the breakout bar's low/high
+                if signal_type == "Buy"
+                    // Stop below the low of the breakout bar + ATR buffer
+                    result := low - (safe_atr * adaptedStopLossMultiplier)
+                else if signal_type == "Sell"
+                    // Stop above the high of the breakout bar + ATR buffer
+                    result := high + (safe_atr * adaptedStopLossMultiplier)
+
+        result
+
+// FIXED: Find the next pivot level in the direction of the trade for target calculation
+getNextPivot(direction, current_price) =>
+    // FIXED: Added comprehensive error handling
+    if na(direction) or (direction != "Buy" and direction != "Sell") or na(current_price) or current_price <= 0
+        [0.0, 0.0]  // Return defaults on error
+    else
+        float target = 0.0
+        float distance = 0.0
+        
+        if direction == "Buy"
+            // Find next resistance pivot above current price
+            min_distance = 999999.0
+            
+            // Check daily pivots first
+            if array.size(pivotLevelsDaily) > 0
+                // FIXED: Added proper bounds checking in pivot search loop
+                for i = 0 to array.size(pivotLevelsDaily) - 1
+                    if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily)
+                        level = array.get(pivotLevelsDaily, i)
+                        label = array.get(pivotLabelsDaily, i)
+                        
+                        if not na(level) and level > current_price and
+                           (str.contains(label, "R") or str.contains(label, "H") or label == "D-PP") and 
+                           (level - current_price) < min_distance
+                            target := level
+                            min_distance := level - current_price
+            
+            // Check weekly pivots if available
+            if showWeekly and array.size(pivotLevelsWeekly) > 0
+                // FIXED: Added proper bounds checking in weekly pivot search loop
+                for i = 0 to array.size(pivotLevelsWeekly) - 1
+                    if i < array.size(pivotLabelsWeekly) and i < array.size(pivotLevelsWeekly)
+                        level = array.get(pivotLevelsWeekly, i)
+                        label = array.get(pivotLabelsWeekly, i)
+                        
+                        if not na(level) and level > current_price and
+                           (str.contains(label, "R") or str.contains(label, "H") or label == "W-PP") and 
+                           (level - current_price) < min_distance
+                            target := level
+                            min_distance := level - current_price
+            
+            // If no pivot found, use a default target based on ATR
+            if target == 0.0 and not na(atrValue) and atrValue > 0
+                target := current_price + (atrValue * 2)
+                min_distance := atrValue * 2
+            
+            distance := min_distance
+            
+        else if direction == "Sell"
+            // Find next support pivot below current price
+            min_distance = 999999.0
+            
+            // Check daily pivots first
+            if array.size(pivotLevelsDaily) > 0
+                // FIXED: Added proper bounds checking in support pivot search loop
+                for i = 0 to array.size(pivotLevelsDaily) - 1
+                    if i < array.size(pivotLabelsDaily) and i < array.size(pivotLevelsDaily)
+                        level = array.get(pivotLevelsDaily, i)
+                        label = array.get(pivotLabelsDaily, i)
+                        
+                        if not na(level) and level > 0 and level < current_price and
+                           (str.contains(label, "S") or str.contains(label, "L") or label == "D-PP") and 
+                           (current_price - level) < min_distance
+                            target := level
+                            min_distance := current_price - level
+            
+            // Check weekly pivots if available
+            if showWeekly and array.size(pivotLevelsWeekly) > 0
+                // FIXED: Added proper bounds checking in weekly support pivot search loop
+                for i = 0 to array.size(pivotLevelsWeekly) - 1
+                    if i < array.size(pivotLabelsWeekly) and i < array.size(pivotLevelsWeekly)
+                        level = array.get(pivotLevelsWeekly, i)
+                        label = array.get(pivotLabelsWeekly, i)
+                        
+                        if not na(level) and level > 0 and level < current_price and
+                           (str.contains(label, "S") or str.contains(label, "L") or label == "W-PP") and 
+                           (current_price - level) < min_distance
+                            target := level
+                            min_distance := current_price - level
+            
+            // If no pivot found, use a default target based on ATR
+            if target == 0.0 and not na(atrValue) and atrValue > 0
+                target := current_price - (atrValue * 2)
+                min_distance := atrValue * 2
+            
+            distance := min_distance
+        
+        [target, distance]
+
+// FIXED: Calculate appropriate position size based on account size, risk tolerance, and setup quality
+calculatePositionSize(signal_type, entry_price, stop_level, setup_strength, is_virgin) =>
+    // FIXED: Added comprehensive error handling
+    if na(signal_type) or na(entry_price) or na(stop_level) or na(setup_strength) or na(is_virgin) or 
+       entry_price <= 0 or stop_level <= 0 or entry_price == stop_level or setup_strength < 0
+        1  // Default position size
+    else
+        // Default position size
+        int position_size = 1
+        
+        // Base position sizing on risk percentage
+        risk_amount = accountSize * (baseRiskPercent / 100)
+        
+        // Adjust risk based on setup strength
+        if setup_strength == 3  // Triple confluence or very strong setup
+            risk_amount := risk_amount * 1.3
+        else if setup_strength == 2  // Double confluence or strong setup
+            risk_amount := risk_amount * 1.1
+        
+        // Adjust risk for virgin pivots
+        if is_virgin
+            risk_amount := risk_amount * 1.2  // Increase by 20% for virgin pivots
+        
+        // Adjust for volatility if enabled
+        if adaptPositionToVolatility
+            risk_amount := risk_amount * adaptedPositionSize
+        
+        // Calculate risk per point
+        risk_per_point = math.abs(entry_price - stop_level)
+        
+        // Calculate position size in lots
+        if risk_per_point > 0  // Avoid division by zero
+            lot_risk = risk_per_point * lotSize
+            if lot_risk > 0
+                position_size := math.floor(risk_amount / lot_risk)
+        
+        // Cap at maximum position size
+        position_size := math.min(position_size, maxPositionSize)
+        
+        // Ensure minimum of 1 lot
+        position_size := math.max(position_size, 1)
+        
+        position_size
+
+// FIXED: Determine appropriate days to expiration (DTE) based on strategy and market conditions
+getOptimalDTE(strategy_type, vol_regime, is_virgin) =>
+    // FIXED: Added error checking for parameters
+    if na(strategy_type) or na(vol_regime) or na(is_virgin)
+        adaptedDte  // Default value on error
+    else
+        base_dte = adaptedDte
+        int result = base_dte  // Default value
+        
+        // Adjust based on strategy type
+        if strategy_type == "Long Call" or strategy_type == "Long Put"
+            // Directional options need less time in high volatility, more in low
+            if vol_regime == "EXTREME"
+                result := math.max(base_dte - 8, 5)
+            else if vol_regime == "HIGH"
+                result := math.max(base_dte - 5, 7)
+            else if vol_regime == "LOW"
+                result := math.min(base_dte + 5, 30)
+            else
+                result := base_dte
+            
+            // Virgin pivots might need slightly more time
+            if is_virgin
+                result := math.min(result + 3, 30)
+        
+        else if strategy_type == "Bull Call Spread" or strategy_type == "Bear Put Spread"
+            // Vertical spreads typically need medium timeframe
+            if vol_regime == "EXTREME"
+                result := math.max(base_dte - 5, 7)
+            else if vol_regime == "HIGH"
+                result := math.max(base_dte - 3, 10)
+            else if vol_regime == "LOW"
+                result := math.min(base_dte + 5, 25)
+            else
+                result := base_dte
+        
+        else if strategy_type == "Cash-Secured Put" or strategy_type == "Covered Call"
+            // Premium selling benefits from longer time decay
+            if vol_regime == "EXTREME"
+                result := math.max(base_dte - 5, 7)
+            else if vol_regime == "HIGH"
+                result := base_dte
+            else if vol_regime == "LOW"
+                result := math.min(base_dte + 10, 30)
+            else
+                result := math.min(base_dte + 5, 25)
+        
+        else if strategy_type == "Iron Condor" or strategy_type == "Iron Butterfly"
+            // Range-bound strategies benefit from medium timeframe
+            if vol_regime == "HIGH"
+                result := math.max(base_dte - 5, 10)
+            else if vol_regime == "LOW"
+                result := math.min(base_dte + 5, 28)
+            else
+                result := base_dte
+        
+        result
+
+// FIXED: Function to determine appropriate strike prices for options strategies
+getStrikes(strategy, current_price, target_price, stop_price) =>
+    // FIXED: Added comprehensive error handling
+    if na(strategy) or na(current_price) or current_price <= 0
+        array.new_string(4, "")  // Return empty array on error
+    else
+        // Array to hold strike prices as strings
+        string[] strikes = array.new_string(4, "")
+        
+        // Round to nearest strike price increment (typically 50 for Nifty)
+        strike_increment = 50
+        atm_strike = math.round(current_price / strike_increment) * strike_increment
+        
+        if strategy == "Long Call" or strategy == "Long Put"
+            // For long options, use ATM or slightly OTM strike
+            option_strike = str.tostring(atm_strike)
+            array.set(strikes, 0, option_strike)
+            
+        else if strategy == "Bull Call Spread" and not na(target_price) and target_price > 0
+            // Lower strike ITM or ATM, upper strike at or near target
+            long_strike = str.tostring(math.floor(current_price / strike_increment) * strike_increment)
+            short_strike = str.tostring(math.round(target_price / strike_increment) * strike_increment)
+            array.set(strikes, 0, long_strike)
+            array.set(strikes, 1, short_strike)
+            
+        else if strategy == "Bear Put Spread" and not na(target_price) and target_price > 0
+            // Higher strike ITM or ATM, lower strike at or near target
+            long_strike = str.tostring(math.ceil(current_price / strike_increment) * strike_increment)
+            short_strike = str.tostring(math.round(target_price / strike_increment) * strike_increment)
+            array.set(strikes, 0, long_strike)
+            array.set(strikes, 1, short_strike)
+            
+        else if strategy == "Cash-Secured Put"
+            // Short strike at or just below support pivot
+            short_strike = str.tostring(math.floor(current_price / strike_increment) * strike_increment)
+            array.set(strikes, 0, "Cash")  // Placeholder for cash component
+            array.set(strikes, 1, short_strike)
+            
+        else if strategy == "Covered Call"
+            // Short strike at or just above resistance pivot
+            short_strike = str.tostring(math.ceil(current_price / strike_increment) * strike_increment)
+            array.set(strikes, 0, "Stock")  // Placeholder for stock component
+            array.set(strikes, 1, short_strike)
+            
+        else if (strategy == "Iron Condor" or strategy == "Iron Butterfly") and 
+                 not na(rangeUpperLevel) and not na(rangeLowerLevel) and
+                 rangeUpperLevel > 0 and rangeLowerLevel > 0
+            // For iron condor/butterfly
+            lower_width = strategy == "Iron Condor" ? 2 : 1
+            upper_width = strategy == "Iron Condor" ? 2 : 1
+            
+            lower_short = math.round(rangeLowerLevel / strike_increment) * strike_increment
+            upper_short = math.round(rangeUpperLevel / strike_increment) * strike_increment
+            
+            lower_long = lower_short - lower_width * strike_increment
+            upper_long = upper_short + upper_width * strike_increment
+            
+            array.set(strikes, 0, str.tostring(upper_long))  // Long call
+            array.set(strikes, 1, str.tostring(upper_short)) // Short call
+            array.set(strikes, 2, str.tostring(lower_short)) // Short put
+            array.set(strikes, 3, str.tostring(lower_long))  // Long put
+        
+        strikes
+
+//==================================================================================================
+// SECTION 11: VISUALIZATION WITH IMPROVED MEMORY MANAGEMENT & THEME ADAPTABILITY
+//==================================================================================================
+
+// FIXED: Store created drawing objects for better memory management
+var line[] lines = array.new_line()
+var label[] labels = array.new_label()
+var box[] boxes = array.new_box()
+var table dashboardTable = na // Use a single table for the dashboard
+
+// Define theme-adaptive colors (simple approach using transparency)
+color pivotDailyColor = color.new(color.blue, 30)
+color pivotWeeklyColor = color.new(color.orange, 20)
+color pivotMonthlyColor = color.new(color.purple, 40)
+color pivotVirginColor = color.new(color.yellow, 0) // Bright yellow for virgin pivots
+color confluenceSupColor = color.new(color.green, 85)
+color confluenceResColor = color.new(color.red, 85)
+color confluenceNeutralColor = color.new(color.fuchsia, 85)
+color tableBgColor = color.new(color.gray, 80)
+color tableTextColor = color.white
+color signalBuyColor = color.lime // Brighter green
+color signalSellColor = color.red // Standard red
+color signalRangeColor = color.aqua // Bright aqua/cyan
+
+// FIXED: Efficient drawing management
+cleanupDrawings() =>
+    // FIXED: Added proper error handling for array operations
+    
+    // Remove excess lines if beyond limit
+    int toRemove = array.size(lines) - maxDrawingObjects
+    if toRemove > 0
+        for i = 1 to toRemove
+            if array.size(lines) > 0
+                ln = array.shift(lines)
+                line.delete(ln)
+    
+    // Remove excess labels if beyond limit
+    toRemove := array.size(labels) - maxDrawingObjects
+    if toRemove > 0
+        for i = 1 to toRemove
+            if array.size(labels) > 0
+                lb = array.shift(labels)
+                label.delete(lb)
+    
+    // Remove excess boxes if beyond limit
+    toRemove := array.size(boxes) - maxDrawingObjects / 2  // Fewer boxes needed
+    if toRemove > 0
+        for i = 1 to toRemove
+            if array.size(boxes) > 0
+                bx = array.shift(boxes)
+                box.delete(bx)
+    
+    // Clear the dashboard table if it exists
+    if not na(dashboardTable)
+        table.delete(dashboardTable)
+        dashboardTable := na // Reset variable
+
+// FIXED: Draw pivot levels on the chart
+drawPivots() =>
+    // Note: cleanupDrawings() is called within drawDashboard now
+    
+    // Draw daily pivots
+    if showDaily and array.size(pivotLevelsDaily) > 0
+        // FIXED: Added comprehensive bounds checking in draw loop
+        for i = 0 to array.size(pivotLevelsDaily) - 1
+            if i < array.size(pivotLabelsDaily) and i < array.size(pivotIsVirginDaily) and i < array.size(pivotLevelsDaily)
+                level = array.get(pivotLevelsDaily, i)
+                pivotLabel = array.get(pivotLabelsDaily, i)
+                isVirgin = array.get(pivotIsVirginDaily, i)
+                
+                if na(level) or level <= 0
+                    continue
+                
+                // Determine line style and color based on pivot type and virgin status
+                lineStyle = line.style_dashed
+                lineColor = pivotDailyColor
+                lineWidth = 1
+
+                if isVirgin
+                    lineWidth := 2  // Make virgin pivots more visible
+                    lineColor := pivotVirginColor // Use dedicated virgin color
+
+                lineId = line.new(bar_index - 10, level, bar_index, level,
+                        width=lineWidth,
+                        color=lineColor,
+                        style=lineStyle,
+                        extend=extend.right)
+                array.push(lines, lineId)
+
+                // Add virgin indicator to label if applicable
+                displayLabel = isVirgin ? pivotLabel + " (V)" : pivotLabel
+
+                labelId = label.new(bar_index, level, displayLabel,
+                         color=color.new(lineColor, 95), // Almost transparent background
+                         textcolor=lineColor,
+                         style=label.style_label_left,
+                         size = pivotLabelSize) // Use input for size
+                array.push(labels, labelId)
+                
+                // Check for price approaching pivot for INFO alerts
+                if enableAlerts and isNearPivot(close, level, alertDistance)
+                    virginText = isVirgin ? " (Virgin)" : ""
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " near " + pivotLabel + virginText + " at " + str.tostring(level, "#.##")
+                    alert(alert_text, alert.freq_once_per_bar) // Keep this as a general info alert
+
+    // Draw weekly pivots
+    if showWeekly and array.size(pivotLevelsWeekly) > 0
+        // FIXED: Added comprehensive bounds checking in weekly pivots draw loop
+        for i = 0 to array.size(pivotLevelsWeekly) - 1
+            if i < array.size(pivotLabelsWeekly) and i < array.size(pivotIsVirginWeekly) and i < array.size(pivotLevelsWeekly)
+                level = array.get(pivotLevelsWeekly, i)
+                pivotLabel = array.get(pivotLabelsWeekly, i)
+                isVirgin = array.get(pivotIsVirginWeekly, i)
+                
+                if na(level) or level <= 0
+                    continue
+                
+                // Determine line style and color for weekly
+                lineWidth = 2
+                lineColor = pivotWeeklyColor
+                lineStyle = line.style_solid
+
+                if isVirgin
+                    lineWidth := 3  // Make virgin pivots more visible
+                    lineColor := pivotVirginColor // Use dedicated virgin color
+
+                lineId = line.new(bar_index - 10, level, bar_index, level,
+                        width=lineWidth,
+                        color=lineColor,
+                        style=lineStyle,
+                        extend=extend.right)
+                array.push(lines, lineId)
+
+                // Add virgin indicator to label if applicable
+                displayLabel = isVirgin ? pivotLabel + " (V)" : pivotLabel
+
+                labelId = label.new(bar_index, level, displayLabel,
+                         color=color.new(lineColor, 95),
+                         textcolor=lineColor,
+                         style=label.style_label_left,
+                         size = pivotLabelSize) // Use input for size
+                array.push(labels, labelId)
+                
+                // Check for price approaching pivot for INFO alerts
+                if enableAlerts and isNearPivot(close, level, alertDistance)
+                    virginText = isVirgin ? " (Virgin)" : ""
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " near " + pivotLabel + virginText + " at " + str.tostring(level, "#.##")
+                    alert(alert_text, alert.freq_once_per_bar) // Keep this as a general info alert
+
+    // Draw monthly pivots
+    if showMonthly and array.size(pivotLevelsMonthly) > 0
+        // FIXED: Added comprehensive bounds checking in monthly pivots draw loop
+        for i = 0 to array.size(pivotLevelsMonthly) - 1
+            if i < array.size(pivotLabelsMonthly) and i < array.size(pivotIsVirginMonthly) and i < array.size(pivotLevelsMonthly)
+                level = array.get(pivotLevelsMonthly, i)
+                pivotLabel = array.get(pivotLabelsMonthly, i)
+                isVirgin = array.get(pivotIsVirginMonthly, i)
+                
+                if na(level) or level <= 0
+                    continue
+                
+                // Determine line style and color for monthly
+                lineWidth = 2
+                lineColor = pivotMonthlyColor
+                lineStyle = line.style_dotted
+
+                if isVirgin
+                    lineWidth := 3  // Make virgin pivots more visible
+                    lineColor := pivotVirginColor // Use dedicated virgin color
+
+                lineId = line.new(bar_index - 10, level, bar_index, level,
+                        width=lineWidth,
+                        color=lineColor,
+                        style=lineStyle,
+                        extend=extend.right)
+                array.push(lines, lineId)
+
+                // Add virgin indicator to label if applicable
+                displayLabel = isVirgin ? pivotLabel + " (V)" : pivotLabel
+
+                labelId = label.new(bar_index, level, displayLabel,
+                         color=color.new(lineColor, 95),
+                         textcolor=lineColor,
+                         style=label.style_label_left,
+                         size = pivotLabelSize) // Use input for size
+                array.push(labels, labelId)
+                
+                // Check for price approaching pivot for INFO alerts
+                if enableAlerts and isNearPivot(close, level, alertDistance)
+                    virginText = isVirgin ? " (Virgin)" : ""
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " near " + pivotLabel + virginText + " at " + str.tostring(level, "#.##")
+                    alert(alert_text, alert.freq_once_per_bar) // Keep this as a general info alert
+
+// FIXED: Draw confluence zones where multiple pivots align
+drawConfluenceZones() =>
+    // Draw confluence zones
+    if showConfluence
+        // FIXED: Added comprehensive bounds checking in confluence zones draw loop
+        for i = 0 to array.size(confluenceZones) - 1
+            if i < array.size(confluenceLabels) and i < array.size(confluenceCounts) and 
+               i < array.size(confluenceTypes) and i < array.size(confluenceVirgin) and 
+               i < array.size(confluenceZones)
+                level = array.get(confluenceZones, i)
+                label_text = array.get(confluenceLabels, i)
+                count = array.get(confluenceCounts, i)
+                conf_type = array.get(confluenceTypes, i)
+                isVirgin = array.get(confluenceVirgin, i)
+                
+                if na(level) or level <= 0
+                    continue
+                
+                // Color based on confluence type
+                color_value = confluenceNeutralColor // Default
+                if conf_type == "S"
+                    color_value := confluenceSupColor
+                else if conf_type == "R"
+                    color_value := confluenceResColor
+
+                // Adjust border for virgin pivots
+                border_color = isVirgin ? pivotVirginColor : color_value
+                border_width = isVirgin ? 2 : 1
+
+                // Draw a box highlighting the confluence zone
+                boxId = box.new(bar_index - 20, level + (level * confluenceThreshold / 100),
+                       bar_index, level - (level * confluenceThreshold / 100),
+                       border_color=border_color,
+                       bgcolor=color_value, // Use semi-transparent background
+                       border_width=border_width,
+                       extend=extend.right)
+                array.push(boxes, boxId)
+
+                // Add a label describing the confluence
+                virgin_text = isVirgin ? " (V)" : ""
+                labelId = label.new(bar_index, level, label_text + " (x" + str.tostring(count) + ")" + virgin_text,
+                         color=color.new(color_value, 95), // Almost transparent background
+                         textcolor=border_color, // Use border color for text
+                         style=label.style_label_left,
+                         size=pivotLabelSize) // Use input for size
+                array.push(labels, labelId)
+                
+                // Alert on strong confluence zones when price is approaching (INFO alert)
+                if enableAlerts and count >= 3 and isNearPivot(close, level, alertDistance)
+                    virgin_alert = isVirgin ? "Virgin " : ""
+                    alert_text = "INFO: Price " + str.tostring(close, "#.##") + " approaching strong (" + str.tostring(count) + "x) " + virgin_alert + "confluence zone at " + str.tostring(level, "#.##")
+                    alert(alert_text, alert.freq_once_per_bar)
+
+// FIXED: Create a combined Strategy Dashboard table
+createStrategyDashboard() =>
+    if showDashboard
+        cleanupDrawings() // Clean drawings before creating the table
+
+        // --- Determine Primary Signal & Calculate Risk Metrics (Copied from old strategy table) ---
+        primary_signal = "None"
+        signal_origin = "None" // "bounce" or "breakout"
+        signal_strength = 0
+        reference_level = 0.0 // Pivot for bounce, entry for breakout
+        is_virgin = false
+        predicted_vol = na(atrValue) ? 0.0 : atrValue
+        entry_price = close // Assume entry at current close for calculation
+
+        if bounceSignal != "None"
+            primary_signal := bounceSignal
+            signal_origin := "bounce"
+            signal_strength := bounceStrength
+            reference_level := bounceLevel
+            is_virgin := bounceIsVirgin
+            predicted_vol := bouncePredictedVol
+        else if breakoutSignal != "None"
+            primary_signal := breakoutSignal
+            signal_origin := "breakout"
+            signal_strength := breakoutStrength
+            reference_level := entry_price // Use entry price as reference for breakout stop % calc
+            is_virgin := breakoutIsVirgin
+            predicted_vol := breakoutPredictedVol
+        else if rangeSignal != "None"
+            primary_signal := rangeSignal
+            signal_origin := "range"
+            signal_strength := rangeStrength
+            reference_level := (rangeUpperLevel + rangeLowerLevel) / 2
+
+        // Get target and stop levels
+        float target_level = 0.0
+        float distance_to_target = 0.0
+        float stop_level = 0.0
+        float risk_per_point = 0.0
+        int position_size = 0
+        float risk_amount_trade = 0.0
+        float risk_percent_trade = 0.0
+        float potential_profit = 0.0
+        float risk_reward = 0.0
+
+        if primary_signal == "Buy" or primary_signal == "Sell"
+            [targetLevel, distanceToTarget] = getNextPivot(primary_signal, entry_price)
+            target_level := targetLevel
+            distance_to_target := distanceToTarget
+            stop_level := getStopLoss(primary_signal, signal_origin, reference_level, atrValue) // Use correct reference level
+            if stop_level > 0
+                risk_per_point := math.abs(entry_price - stop_level)
+                position_size := calculatePositionSize(primary_signal, entry_price, stop_level, signal_strength, is_virgin)
+                if position_size > 0 and lotSize > 0 and accountSize > 0
+                    risk_amount_trade := risk_per_point * position_size * lotSize
+                    risk_percent_trade := (risk_amount_trade / accountSize) * 100
+                    potential_profit := distance_to_target * position_size * lotSize
+                    if risk_amount_trade > 0
+                        risk_reward := potential_profit / risk_amount_trade
+
+        // --- Create the Dashboard Table ---
+        // Determine number of rows needed (dynamic would be better, but hard in Pine)
+        // Max rows: Title, Signal, Strategy, R:R, Target, Stop, Size, DTE, Strikes, Volatility, Trend, Pivot Method, Volume Status = 13
+        dashboardTable := table.new(position.top_left, 2, 13, bgcolor = tableBgColor, border_width = 1, frame_width = 1, frame_color = color.gray)
+
+        // Title
+        table.cell(dashboardTable, 0, 0, "Strategy Dashboard", width = 15, text_color = tableTextColor, bgcolor = color.new(color.black, 50))
+        table.cell(dashboardTable, 1, 0, "Value", width = 25, text_color = tableTextColor, bgcolor = color.new(color.black, 50))
+
+        // Row 1: Primary Signal
+        signal_text = "None"
+        signal_color = tableTextColor
+        if primary_signal != "None"
+            signal_text := primary_signal + " (" + signal_origin + (is_virgin ? ", V)" : ")") + " " + str.tostring(signal_strength) + "★"
+            signal_color := primary_signal == "Buy" ? signalBuyColor : primary_signal == "Sell" ? signalSellColor : signalRangeColor
+        table.cell(dashboardTable, 0, 1, "Signal", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 1, signal_text, text_color = signal_color)
+
+        // Row 2: Options Strategy
+        optimal_dte = getOptimalDTE(primary_signal, volRegime, is_virgin)
+        strategy_rec = getAdvancedOptionStrategy(primary_signal, volRegime, signal_strength, is_virgin, predicted_vol, optimal_dte, distance_to_target)
+        table.cell(dashboardTable, 0, 2, "Option Strategy", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 2, strategy_rec, text_color = tableTextColor)
+
+        // Row 3: Risk:Reward
+        rr_text = risk_reward > 0 ? str.tostring(risk_reward, "#.##") : "N/A"
+        rr_color = risk_reward >= 2.0 ? color.green : risk_reward >= 1.5 ? color.orange : risk_reward > 0 ? color.red : tableTextColor
+        table.cell(dashboardTable, 0, 3, "Risk:Reward", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 3, rr_text, text_color = rr_color)
+
+        // Row 4: Target Level
+        target_text = target_level > 0 ? str.tostring(target_level, "#.##") : (rangeSignal == "Range" ? str.tostring(rangeUpperLevel, "#.##") : "N/A")
+        table.cell(dashboardTable, 0, 4, "Target / Upper", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 4, target_text, text_color = color.green)
+
+        // Row 5: Stop Level
+        stop_text = stop_level > 0 ? str.tostring(stop_level, "#.##") : (rangeSignal == "Range" ? str.tostring(rangeLowerLevel, "#.##") : "N/A")
+        table.cell(dashboardTable, 0, 5, "Stop / Lower", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 5, stop_text, text_color = color.red)
+
+        // Row 6: Position Size
+        position_size_text = position_size > 0 ? str.tostring(position_size) + " lots" : "N/A"
+        table.cell(dashboardTable, 0, 6, "Position Size", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 6, position_size_text, text_color = tableTextColor)
+
+        // Row 7: Recommended DTE
+        dte_text = optimal_dte > 0 ? str.tostring(optimal_dte) + " days" : "N/A"
+        table.cell(dashboardTable, 0, 7, "Optimal DTE", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 7, dte_text, text_color = tableTextColor)
+
+        // Row 8: Strike Selection (Only if signal active)
+        strikes_text = "N/A"
+        if strategy_rec != "None" and primary_signal != "None"
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+            // ... (strike text generation logic remains the same) ...
+            if strategy_rec == "Long Call" or strategy_rec == "Long Put"
+                if array.size(strikes) > 0
+                    strikes_text := array.get(strikes, 0)
+            else if strategy_rec == "Bull Call Spread" or strategy_rec == "Bear Put Spread"
+                if array.size(strikes) > 1
+                    strikes_text := array.get(strikes, 0) + "/" + array.get(strikes, 1)
+            else if strategy_rec == "Cash-Secured Put" or strategy_rec == "Covered Call"
+                if array.size(strikes) > 1
+                    strikes_text := array.get(strikes, 1)
+            else if strategy_rec == "Iron Condor" or strategy_rec == "Iron Butterfly"
+                if array.size(strikes) > 3
+                    strikes_text := array.get(strikes, 3) + "/" + array.get(strikes, 2) + " | " +
+                                   array.get(strikes, 1) + "/" + array.get(strikes, 0)
+        table.cell(dashboardTable, 0, 8, "Strikes", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 8, strikes_text, text_color = tableTextColor)
+
+        // Row 9: Volatility Regime
+        vol_color = lowVolRegime ? color.green : highVolRegime ? color.red : color.orange
+        table.cell(dashboardTable, 0, 9, "Volatility", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 9, volRegime, text_color = vol_color)
+
+        // Row 10: Trend (ADX)
+        trend_color = adxValue > 25 ? color.green : color.gray
+        adx_str = na(adxValue) ? "N/A" : str.tostring(adxValue, "#.#") + (adxValue > 25 ? " (Trend)" : " (Range)")
+        table.cell(dashboardTable, 0, 10, "Trend (ADX)", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 10, adx_str, text_color = trend_color)
+
+        // Row 11: Pivot Method
+        table.cell(dashboardTable, 0, 11, "Pivot Method", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 11, activePivotMethod, text_color = tableTextColor)
+
+        // Row 12: Volume Status
+        vol_status = isVolumeSpike ? "SPIKE" : "Normal"
+        vol_status_color = isVolumeSpike ? color.green : tableTextColor
+        table.cell(dashboardTable, 0, 12, "Volume", text_color = tableTextColor)
+        table.cell(dashboardTable, 1, 12, vol_status, text_color = vol_status_color)
+
+// --- DELETED createOptionIndicatorsTable() and createStrategySignalsTable() ---
+// The functionality is now combined into createStrategyDashboard()
+    // --- Row 1: Pivot Bounce ---
+    table.cell(strategyTable, 0, 1, "Pivot Bounce", text_color=color.white)
+    bounce_color = bounceSignal == "Buy" ? color.green : bounceSignal == "Sell" ? color.red : color.white
+    bounce_text = bounceSignal == "None" ? "None" :
+                 bounceSignal + " at " + str.tostring(bounceLevel, "#.##") + " (" + str.tostring(bounceStrength) + "★)"
+    table.cell(strategyTable, 1, 1, bounce_text, text_color=bounce_color)
+
+    // --- Row 2: Pivot Breakout ---
+    table.cell(strategyTable, 0, 2, "Pivot Breakout", text_color=color.white)
+    breakout_color = breakoutSignal == "Buy" ? color.green : breakoutSignal == "Sell" ? color.red : color.white
+    breakout_text = breakoutSignal == "None" ? "None" :
+                   breakoutSignal + " at " + str.tostring(breakoutLevel, "#.##") + " (" + str.tostring(breakoutStrength) + "★)"
+    table.cell(strategyTable, 1, 2, breakout_text, text_color=breakout_color)
+
+    // --- Row 3: Range Signal ---
+    table.cell(strategyTable, 0, 3, "Range Signal", text_color=color.white)
+    range_text = rangeSignal == "Range" ?
+                "Between " + str.tostring(rangeLowerLevel, "#.##") + " and " + str.tostring(rangeUpperLevel, "#.##") +
+                " (" + str.tostring(rangeStrength) + "★)" : "None"
+    table.cell(strategyTable, 1, 3, range_text, text_color=color.blue)
+
+    // --- Determine Primary Signal & Calculate Risk Metrics ---
+    primary_signal = "None"
+    signal_origin = "None" // "bounce" or "breakout"
+    signal_strength = 0
+    reference_level = 0.0 // Pivot for bounce, entry for breakout
+    is_virgin = false
+    predicted_vol = na(atrValue) ? 0.0 : atrValue
+    entry_price = close // Assume entry at current close for calculation
+
+    if bounceSignal != "None"
+        primary_signal := bounceSignal
+        signal_origin := "bounce"
+        signal_strength := bounceStrength
+        reference_level := bounceLevel
+        is_virgin := bounceIsVirgin
+        predicted_vol := bouncePredictedVol
+    else if breakoutSignal != "None"
+        primary_signal := breakoutSignal
+        signal_origin := "breakout"
+        signal_strength := breakoutStrength
+        reference_level := entry_price // Use entry price as reference for breakout stop % calc
+        is_virgin := breakoutIsVirgin
+        predicted_vol := breakoutPredictedVol
+    else if rangeSignal != "None"
+        primary_signal := rangeSignal
+        signal_origin := "range"
+        signal_strength := rangeStrength
+        reference_level := (rangeUpperLevel + rangeLowerLevel) / 2
+
+    // Get target and stop levels
+    float target_level = 0.0
+    float distance_to_target = 0.0
+    float stop_level = 0.0
+    float risk_per_point = 0.0
+    int position_size = 0
+    float risk_amount_trade = 0.0
+    float risk_percent_trade = 0.0
+    float potential_profit = 0.0
+    float risk_reward = 0.0
+
+    if primary_signal == "Buy" or primary_signal == "Sell"
+        [targetLevel, distanceToTarget] = getNextPivot(primary_signal, entry_price)
+        target_level := targetLevel
+        distance_to_target := distanceToTarget
+        stop_level := getStopLoss(primary_signal, signal_origin, reference_level, atrValue) // Use correct reference level
+        if stop_level > 0
+            risk_per_point := math.abs(entry_price - stop_level)
+            position_size := calculatePositionSize(primary_signal, entry_price, stop_level, signal_strength, is_virgin)
+            if position_size > 0 and lotSize > 0 and accountSize > 0
+                risk_amount_trade := risk_per_point * position_size * lotSize
+                risk_percent_trade := (risk_amount_trade / accountSize) * 100
+                potential_profit := distance_to_target * position_size * lotSize
+                if risk_amount_trade > 0
+                    risk_reward := potential_profit / risk_amount_trade
+
+    // --- Row 4: Options Strategy ---
+    optimal_dte = getOptimalDTE(primary_signal, volRegime, is_virgin)
+    strategy_rec = getAdvancedOptionStrategy(primary_signal, volRegime, signal_strength, is_virgin, predicted_vol, optimal_dte, distance_to_target)
+    table.cell(strategyTable, 0, 4, "Options Strategy", text_color=color.white)
+    table.cell(strategyTable, 1, 4, strategy_rec, text_color=color.white)
+
+    // --- Row 5: Position Size ---
+    table.cell(strategyTable, 0, 5, "Position Size", text_color=color.white)
+    position_size_text = position_size > 0 ? str.tostring(position_size) + " lots" : "N/A"
+    table.cell(strategyTable, 1, 5, position_size_text, text_color=color.white)
+
+    // --- Row 6: Risk:Reward ---
+    table.cell(strategyTable, 0, 6, "Risk:Reward", text_color=color.white)
+    rr_text = risk_reward > 0 ? str.tostring(risk_reward, "#.##") : "N/A"
+    rr_color = risk_reward >= 2.0 ? color.green : risk_reward >= 1.5 ? color.orange : risk_reward > 0 ? color.red : color.white
+    table.cell(strategyTable, 1, 6, rr_text, text_color=rr_color)
+
+    // --- Row 7: Recommended DTE ---
+    table.cell(strategyTable, 0, 7, "Recommended DTE", text_color=color.white)
+    dte_text = optimal_dte > 0 ? str.tostring(optimal_dte) + " days" : "N/A"
+    table.cell(strategyTable, 1, 7, dte_text, text_color=color.white)
+
+    // --- Row 8: Strike Selection ---
+    table.cell(strategyTable, 0, 8, "Strike Selection", text_color=color.white)
+    strikes_text = "N/A"
+    if strategy_rec != "None" and (primary_signal == "Buy" or primary_signal == "Sell" or primary_signal == "Range")
+        strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+        // ... (strike text generation logic remains the same) ...
+        if strategy_rec == "Long Call" or strategy_rec == "Long Put"
+            if array.size(strikes) > 0
+                strikes_text := array.get(strikes, 0)
+        else if strategy_rec == "Bull Call Spread" or strategy_rec == "Bear Put Spread"
+            if array.size(strikes) > 1
+                strikes_text := array.get(strikes, 0) + "/" + array.get(strikes, 1)
+        else if strategy_rec == "Cash-Secured Put" or strategy_rec == "Covered Call"
+            if array.size(strikes) > 1
+                strikes_text := array.get(strikes, 1)
+        else if strategy_rec == "Iron Condor" or strategy_rec == "Iron Butterfly"
+            if array.size(strikes) > 3
+                strikes_text := array.get(strikes, 3) + "/" + array.get(strikes, 2) + " - " +
+                               array.get(strikes, 1) + "/" + array.get(strikes, 0)
+    table.cell(strategyTable, 1, 8, strikes_text, text_color=color.white)
+
+    // --- Row 9: Stop Loss Level ---
+    table.cell(strategyTable, 0, 9, "Stop Level (Price)", text_color=color.white)
+    stop_text = stop_level > 0 ? str.tostring(stop_level, "#.##") : "N/A"
+    table.cell(strategyTable, 1, 9, stop_text, text_color=color.red)
+
+    // --- Row 10: Target Level ---
+    table.cell(strategyTable, 0, 10, "Target Level (Price)", text_color=color.white)
+    target_text = target_level > 0 ? str.tostring(target_level, "#.##") : "N/A"
+    table.cell(strategyTable, 1, 10, target_text, text_color=color.green)
+
+    // --- Row 11: Risk per Trade (INR) ---
+    table.cell(strategyTable, 0, 11, "Risk per Trade (INR)", text_color=color.white)
+    risk_amount_text = risk_amount_trade > 0 ? str.tostring(risk_amount_trade, "#.##") : "N/A"
+    table.cell(strategyTable, 1, 11, risk_amount_text, text_color=color.red)
+
+    // --- Row 12: Risk per Trade (%) ---
+    table.cell(strategyTable, 0, 12, "Risk per Trade (%)", text_color=color.white)
+    risk_percent_text = risk_percent_trade > 0 ? str.tostring(risk_percent_trade, "#.##") + "%" : "N/A"
+    table.cell(strategyTable, 1, 12, risk_percent_text, text_color=color.red)
+
+    // --- Row 13: ATR Value ---
+    table.cell(strategyTable, 0, 13, "Current ATR", text_color=color.white)
+    atr_text = na(atrValue) ? "N/A" : str.tostring(atrValue, "#.##")
+    table.cell(strategyTable, 1, 13, atr_text, text_color=color.white)
+
+
+    // --- Column 3: Recommendations / Detailed Risk ---
+    if primary_signal != "None"
+        // Trade Recommendation (Entry/Target/Stop)
+        if primary_signal == "Buy" or primary_signal == "Sell"
+            rec = "Signal: " + primary_signal + " (" + signal_origin + ")\n" +
+                  "Entry: ~" + str.tostring(entry_price, "#.##") + "\n" +
+                  "Target: " + target_text + "\n" +
+                  "Stop: " + stop_text + "\n" +
+                  "Position: " + position_size_text
+            signal_color = primary_signal == "Buy" ? color.green : color.red
+            table.cell(strategyTable, 2, 1, rec, text_color=signal_color, halign=text.align_left) // Align left
+
+        // Range Recommendation
+        else if primary_signal == "Range"
+            rec = "Strategy: " + strategy_rec + "\n" +
+                  "Upper Boundary: " + str.tostring(rangeUpperLevel, "#.##") + "\n" +
+                  "Lower Boundary: " + str.tostring(rangeLowerLevel, "#.##") + "\n" +
+                  "Setup Strength: " + str.tostring(rangeStrength) + "★"
+            table.cell(strategyTable, 2, 3, rec, text_color=color.blue, halign=text.align_left) // Align left
+
+        // Option Structure Recommendation
+        options_rec = "N/A"
+        if strategy_rec == "Bull Call Spread"
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+            if array.size(strikes) > 1
+                bull_call_long = array.get(strikes, 0)
+                bull_call_short = array.get(strikes, 1)
+                if bull_call_long != "" and bull_call_short != ""
+                    options_rec = "Buy " + bull_call_long + " Call\n" +
+                                  "Sell " + bull_call_short + " Call\n" +
+                                  "DTE: " + dte_text
+        else if strategy_rec == "Bear Put Spread"
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+            if array.size(strikes) > 1
+                bear_put_long = array.get(strikes, 0)
+                bear_put_short = array.get(strikes, 1)
+                if bear_put_long != "" and bear_put_short != ""
+                    options_rec = "Buy " + bear_put_long + " Put\n" +
+                                  "Sell " + bear_put_short + " Put\n" +
+                                  "DTE: " + dte_text
+        else if strategy_rec == "Long Call" or strategy_rec == "Long Put"
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+            if array.size(strikes) > 0
+                long_option_strike = array.get(strikes, 0)
+                if long_option_strike != ""
+                    options_rec = "Buy " + long_option_strike + " " + (strategy_rec == "Long Call" ? "Call" : "Put") + "\n" +
+                                  "DTE: " + dte_text
+        else if strategy_rec == "Cash-Secured Put"
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+            if array.size(strikes) > 1
+                csp_strike = array.get(strikes, 1)
+                if csp_strike != ""
+                    options_rec = "Sell " + csp_strike + " Put\n" +
+                                  "DTE: " + dte_text
+        else if strategy_rec == "Covered Call"
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+            if array.size(strikes) > 1
+                cc_strike = array.get(strikes, 1)
+                if cc_strike != ""
+                    options_rec = "Sell " + cc_strike + " Call\n" +
+                                  "DTE: " + dte_text
+        else if strategy_rec == "Iron Condor" or strategy_rec == "Iron Butterfly"
+            strikes = getStrikes(strategy_rec, entry_price, target_level, stop_level)
+            if array.size(strikes) > 3
+                ic_long_put = array.get(strikes, 3)
+                ic_short_put = array.get(strikes, 2)
+                ic_short_call = array.get(strikes, 1)
+                ic_long_call = array.get(strikes, 0)
+                if ic_long_put != "" and ic_short_put != "" and ic_short_call != "" and ic_long_call != ""
+                    options_rec = "Sell " + ic_short_call + " Call/" + ic_short_put + " Put\n" +
+                                  "Buy " + ic_long_call + " Call/" + ic_long_put + " Put\n" +
+                                  "DTE: " + dte_text
+
+        if options_rec != "N/A"
+            table.cell(strategyTable, 2, 4, options_rec, text_color=color.white, halign=text.align_left) // Align left
+
+        // Detailed Risk Metrics
+        risk_details = "Risk/Trade: " + risk_amount_text + " (" + risk_percent_text + ")\n" +
+                       "Potential Profit: " + (potential_profit > 0 ? str.tostring(potential_profit, "#.##") : "N/A") + "\n" +
+                       "R:R Ratio: " + rr_text + "\n" +
+                       "ATR: " + atr_text
+        table.cell(strategyTable, 2, 11, risk_details, text_color=color.white, halign=text.align_left) // Align left
+//==================================================================================================
+// SECTION 12: PLOTTING AND VISUALIZATION EXECUTION
+//==================================================================================================
+
+// FIXED: Draw visualization elements only on last bar for better performance
+if barstate.islast
+    drawPivots()
+    drawConfluenceZones()
+    createStrategyDashboard() // Call the new combined dashboard function
+
+// FIXED: Plot signals on the chart with better conditional plotting, size, and tooltips
+bounce_buy_tooltip = bounceSignal == "Buy" ? "Bounce Buy\nLevel: " + str.tostring(bounceLevel, "#.##") + "\nScore: " + str.tostring(bounceScore) + (bounceIsVirgin ? "\n(Virgin)" : "") : na
+plotshape(showPivotBounceSignals and bounceSignal == "Buy", "Pivot Bounce Buy",
+         shape.labelup, location.belowbar, signalBuyColor, size=signalShapeSize, text=" B ", textcolor=color.white, tooltip = bounce_buy_tooltip)
+
+bounce_sell_tooltip = bounceSignal == "Sell" ? "Bounce Sell\nLevel: " + str.tostring(bounceLevel, "#.##") + "\nScore: " + str.tostring(bounceScore) + (bounceIsVirgin ? "\n(Virgin)" : "") : na
+plotshape(showPivotBounceSignals and bounceSignal == "Sell", "Pivot Bounce Sell",
+         shape.labeldown, location.abovebar, signalSellColor, size=signalShapeSize, text=" S ", textcolor=color.white, tooltip = bounce_sell_tooltip)
+
+breakout_buy_tooltip = breakoutSignal == "Buy" ? "Breakout Buy\nLevel: " + str.tostring(breakoutLevel, "#.##") + "\nScore: " + str.tostring(breakoutScore) + (breakoutIsVirgin ? "\n(Virgin)" : "") : na
+plotshape(showPivotBreakoutSignals and breakoutSignal == "Buy", "Pivot Breakout Buy",
+         shape.labelup, location.belowbar, signalBuyColor, size=signalShapeSize, text="BR+", textcolor=color.white, tooltip = breakout_buy_tooltip) // Changed shape/text
+
+breakout_sell_tooltip = breakoutSignal == "Sell" ? "Breakout Sell\nLevel: " + str.tostring(breakoutLevel, "#.##") + "\nScore: " + str.tostring(breakoutScore) + (breakoutIsVirgin ? "\n(Virgin)" : "") : na
+plotshape(showPivotBreakoutSignals and breakoutSignal == "Sell", "Pivot Breakout Sell",
+         shape.labeldown, location.abovebar, signalSellColor, size=signalShapeSize, text="BR-", textcolor=color.white, tooltip = breakout_sell_tooltip) // Changed shape/text
+
+range_tooltip = rangeSignal == "Range" ? "Range Signal\nUpper: " + str.tostring(rangeUpperLevel, "#.##") + "\nLower: " + str.tostring(rangeLowerLevel, "#.##") + "\nScore: " + str.tostring(rangeScore) : na
+plotshape(showRangeSignals and rangeSignal == "Range", "Range Signal",
+         shape.diamond, location.abovebar, signalRangeColor, size=signalShapeSize, tooltip = range_tooltip) // Keep diamond, add tooltip
+
+// FIXED: Plot volume indicators with better error handling - move to data window
+plotchar(isVolumeSpike and not na(smartVolume) ? smartVolume : na, "Volume Spike", "▲", location.bottom, color.green, size=size.tiny, display=display.data_window) // Added display setting
+plot(volumeMA, "Weighted Volume MA", color.gray, 1, plot.style_line, display=display.data_window + display.status_line) // Added display setting
+
+// Optional: Plot volatility bands - move to data window
+volatilityUpper = ta.sma(close, 20) + (na(atrValue) ? 0 : atrValue * 2)
+volatilityLower = ta.sma(close, 20) - (na(atrValue) ? 0 : atrValue * 2)
+plot(volatilityUpper, "Volatility Upper Band", color.new(color.purple, 80), 1, plot.style_line, display=display.data_window) // Added display setting
+plot(volatilityLower, "Volatility Lower Band", color.new(color.purple, 80), 1, plot.style_line, display=display.data_window) // Added display setting
+
+//==================================================================================================
+// SECTION 13: ALERTS AND PERFORMANCE TRACKING
+//==================================================================================================
+
+// Function to get the current signal values
+get_current_signal() =>
+    // Determine which signal to use (bounce or breakout)
+    signal = bounceSignal != "None" ? bounceSignal : breakoutSignal
+    level = bounceSignal != "None" ? bounceLevel : breakoutLevel
+    strength = bounceSignal != "None" ? bounceStrength : breakoutStrength
+    pivot_type = bounceSignal != "None" ? bouncePivotType : breakoutPivotType
+    is_virgin = bounceSignal != "None" ? bounceIsVirgin : breakoutIsVirgin
+    signal_score = bounceSignal != "None" ? bounceScore : breakoutScore
+    predicted_vol = bounceSignal != "None" ? bouncePredictedVol : breakoutPredictedVol
+    
+    [signal, level, strength, pivot_type, is_virgin, signal_score, predicted_vol]
+
+// FIXED: Trade signal variables for alert generation
+// FIXED: Trade signal variables for alert generation & state tracking
+var string lastPrimarySignal = "None"
+var string lastSignalOrigin = "None"
+var float lastSignalLevel = 0.0
+
+// FIXED: Performance tracking variables
+var int totalActionSignals = 0 // Track only alerts meeting minAlertScore
+var int winningTrades = 0
+var int losingTrades = 0
+var float totalProfit = 0.0
+var float maxDrawdown = 0.0
+
+// FIXED: Track entry signals for performance monitoring
+var float entryPrice = 0.0
+var string entrySignal = "None"
+var string entrySignalOrigin = "None" // Track if bounce or breakout
+var float initialStopLossLevel = 0.0 // Store the initial stop
+var float currentStopLossLevel = 0.0 // This will be trailed
+var float targetLevel = 0.0
+var int entryBar = 0
+var float highestHighSinceEntry = 0.0 // For trailing stop (long)
+var float lowestLowSinceEntry = 999999.0 // For trailing stop (short)
+
+// FIXED: Consolidated ACTION Signal Alert Generation
+if barstate.isconfirmed and enableAlerts
+
+    // Determine primary signal for the current bar
+    primary_signal = "None"
+    signal_origin = "None"
+    signal_level = 0.0
+    signal_strength = 0
+    signal_pivot_type = ""
+    signal_is_virgin = false
+    signal_score = 0
+    signal_predicted_vol = 0.0
+
+    // Prioritize Bounce > Breakout > Range
+    if bounceSignal != "None"
+        primary_signal := bounceSignal
+        signal_origin := "bounce"
+        signal_level := bounceLevel
+        signal_strength := bounceStrength
+        signal_pivot_type := bouncePivotType
+        signal_is_virgin := bounceIsVirgin
+        signal_score := bounceScore
+        signal_predicted_vol := bouncePredictedVol
+    else if breakoutSignal != "None"
+        primary_signal := breakoutSignal
+        signal_origin := "breakout"
+        signal_level := breakoutLevel // Level where breakout occurred
+        signal_strength := breakoutStrength
+        signal_pivot_type := breakoutPivotType
+        signal_is_virgin := breakoutIsVirgin
+        signal_score := breakoutScore
+        signal_predicted_vol := breakoutPredictedVol
+    else if rangeSignal != "None"
+        primary_signal := "Range"
+        signal_origin := "range"
+        signal_level := (rangeUpperLevel + rangeLowerLevel) / 2 // Midpoint of range
+        signal_strength := rangeStrength
+        signal_pivot_type := "Range"
+        signal_is_virgin := false // N/A for range
+        signal_score := rangeScore
+        signal_predicted_vol := atrValue // Use current ATR for range
+
+    // Check if a new actionable signal has occurred
+    isNewSignal = primary_signal != "None" and
+                 (primary_signal != lastPrimarySignal or signal_origin != lastSignalOrigin or signal_level != lastSignalLevel) and
+                 signal_score >= minAlertScore // Check against alert threshold
+
+    if isNewSignal
+        totalActionSignals += 1 // Increment count for actionable signals
+        virgin_text = signal_is_virgin ? "Virgin " : ""
+        entry_price = close // Assume entry at close for calculations
+
+        // Calculate details for the alert
+        strategy_name = "N/A"
+        target = 0.0
+        distance = 0.0
+        stop = 0.0
+        position = 0
+        risk_reward_ratio = 0.0
+
+        if primary_signal == "Buy" or primary_signal == "Sell"
+            strategy_name := getAdvancedOptionStrategy(primary_signal, volRegime, signal_strength, signal_is_virgin, signal_predicted_vol, adaptedDte, 0)
+            [target, distance] := getNextPivot(primary_signal, entry_price)
+            stop_ref_level = signal_origin == "bounce" ? signal_level : entry_price // Use pivot for bounce stop, entry for breakout stop
+            stop := getStopLoss(primary_signal, signal_origin, stop_ref_level, atrValue)
+            if stop > 0
+                position := calculatePositionSize(primary_signal, entry_price, stop, signal_strength, signal_is_virgin)
+                if distance > 0 and math.abs(entry_price - stop) > 0
+                    risk_reward_ratio := distance / math.abs(entry_price - stop)
+        else if primary_signal == "Range"
+            strategy_name := getAdvancedOptionStrategy(primary_signal, volRegime, signal_strength, false, signal_predicted_vol, adaptedDte, 0)
+            target := rangeUpperLevel // Use range boundaries for display
+            stop := rangeLowerLevel
+            position := 0 // Position sizing for range needs different logic (not implemented here)
+            risk_reward_ratio := 0.0 // R:R not directly applicable in the same way
+
+        // --- Build Alert Message ---
+        base_alert = "ACTION: " + virgin_text + signal_origin + " " + primary_signal + " Signal @ " + str.tostring(entry_price, "#.##") +
+                     " (Score: " + str.tostring(signal_score) + "/" + str.tostring(minAlertScore) + "+, Str: " + str.tostring(signal_strength) + "★)"
+
+        if detailedAlerts
+            alert_message = base_alert + "\n" +
+                          "Pivot: " + signal_pivot_type + (signal_origin != "range" ? " at " + str.tostring(signal_level, "#.##") : "") + "\n" +
+                          "Strategy: " + strategy_name + "\n" +
+                          "Target: " + str.tostring(target, "#.##") + "\n" +
+                          "Stop: " + str.tostring(stop, "#.##") + "\n" +
+                          "Position: " + (position > 0 ? str.tostring(position) + " lots" : "N/A") + "\n" +
+                          "R:R: " + (risk_reward_ratio > 0 ? str.tostring(risk_reward_ratio, "#.##") : "N/A") + "\n" +
+                          "Vol: " + volRegime + (isVolumeSpike ? " (Spike)" : "")
+        else
+            alert_message = base_alert
+
+        alert(alert_message, alert.freq_once_per_bar)
+
+        // --- Set entry tracking variables ONLY for Buy/Sell signals ---
+        if primary_signal == "Buy" or primary_signal == "Sell"
+            entryPrice := entry_price
+            entrySignal := primary_signal
+            entrySignalOrigin := signal_origin
+            initialStopLossLevel := stop
+            currentStopLossLevel := stop
+            targetLevel := target
+            entryBar := bar_index
+            highestHighSinceEntry := high // Reset trailing stop trackers
+            lowestLowSinceEntry := low
+        else
+            // Reset entry tracking if it was a range signal
+             entrySignal := "None"
+
+
+    // Update last signal state
+    lastPrimarySignal := primary_signal
+    lastSignalOrigin := signal_origin
+    lastSignalLevel := signal_level
+
+
+// FIXED: Simple performance tracking with Trailing Stop & EXIT Alerts
+if entrySignal != "None" and entryPrice > 0 and bar_index > entryBar // Ensure trade is active and not on entry bar
+
+    // --- Trailing Stop Logic ---
+    if enableTrailingStop and not na(atrValue) and atrValue > 0
+        if entrySignal == "Buy"
+            // Update highest high since entry
+            highestHighSinceEntry := math.max(highestHighSinceEntry, high)
+            // Calculate potential new trailing stop
+            newTrailStop = highestHighSinceEntry - (atrValue * trailingStopAtrMultiplier)
+            // Trail the stop up
+            currentStopLossLevel := math.max(currentStopLossLevel, newTrailStop)
+        else if entrySignal == "Sell"
+            // Update lowest low since entry
+            lowestLowSinceEntry := math.min(lowestLowSinceEntry, low)
+            // Calculate potential new trailing stop
+            newTrailStop = lowestLowSinceEntry + (atrValue * trailingStopAtrMultiplier)
+            // Trail the stop down
+            currentStopLossLevel := math.min(currentStopLossLevel, newTrailStop)
+
+    // --- Exit Check Logic ---
+    bool targetHit = false
+    bool stopHit = false
+    float exitPrice = 0.0
+
+    if entrySignal == "Buy"
+        targetHit := high >= targetLevel
+        stopHit := low <= currentStopLossLevel
+        exitPrice := targetHit ? targetLevel : (stopHit ? currentStopLossLevel : 0.0)
+    else if entrySignal == "Sell"
+        targetHit := low <= targetLevel
+        stopHit := high >= currentStopLossLevel
+        exitPrice := targetHit ? targetLevel : (stopHit ? currentStopLossLevel : 0.0)
+
+    // --- Process Exit ---
+    if targetHit or stopHit
+        float tradeResult = 0.0
+        if entrySignal == "Buy"
+            tradeResult := (exitPrice - entryPrice) / entryPrice * 100
+        else if entrySignal == "Sell"
+            tradeResult := (entryPrice - exitPrice) / entryPrice * 100
+
+        // --- Generate EXIT Alert ---
+        if enableAlerts
+            exit_reason = targetHit ? "Target Hit" : "Stop Hit"
+            outcome = tradeResult > 0 ? "WIN" : "LOSS"
+            exit_alert_msg = "EXIT: " + entrySignal + " Trade Closed (" + exit_reason + " @ " + str.tostring(exitPrice, "#.##") + "). Outcome: " + outcome + " (" + str.tostring(tradeResult, "#.##") + "%)"
+            alert(exit_alert_msg, alert.freq_once_per_bar)
+
+        // Update performance stats
+        if tradeResult > 0
+            winningTrades += 1
+        else
+            losingTrades += 1
+            maxDrawdown := math.min(maxDrawdown, tradeResult)
+        totalProfit += tradeResult
+
+        // --- Reset tracking variables ---
+        entrySignal := "None"
+        entryPrice := 0.0
+        entrySignalOrigin := "None"
+        initialStopLossLevel := 0.0
+        currentStopLossLevel := 0.0
+        targetLevel := 0.0
+        entryBar := 0
+        highestHighSinceEntry := 0.0
+        lowestLowSinceEntry := 999999.0
+
+// INFO Alert Conditions using alertcondition()
+// These are less critical, more for awareness
+
+// Volume Spike near any major pivot
+bool spikeNearAnyPivot = false
+if isVolumeSpike
+    // Check Daily Pivots
+    if showDaily and array.size(pivotLevelsDaily) > 0
+        for i = 0 to math.min(array.size(pivotLevelsDaily), 5) - 1 // Check first few daily
+            if i < array.size(pivotLevelsDaily)
+                level = array.get(pivotLevelsDaily, i)
+                if not na(level) and level > 0 and isNearPivot(close, level, pivotZoneWidth * 2)
+                    spikeNearAnyPivot := true
+                    break
+    // Check Weekly Pivots if not already found
+    if not spikeNearAnyPivot and showWeekly and array.size(pivotLevelsWeekly) > 0
+        for i = 0 to math.min(array.size(pivotLevelsWeekly), 3) - 1 // Check first few weekly
+             if i < array.size(pivotLevelsWeekly)
+                level = array.get(pivotLevelsWeekly, i)
+                if not na(level) and level > 0 and isNearPivot(close, level, pivotZoneWidth * 2)
+                    spikeNearAnyPivot := true
+                    break
+alertcondition(spikeNearAnyPivot, "INFO: Volume Spike Near Pivot", "INFO: Volume spike detected near a pivot level (" + str.tostring(close, "#.##") + ")")
+
+// Virgin Pivot being tested (based on bounce logic primarily)
+bool virginTestOccurring = (bounceIsVirgin and bounceSignal != "None") or (breakoutIsVirgin and breakoutSignal != "None")
+float virginLevel = bounceIsVirgin ? bounceLevel : (breakoutIsVirgin ? breakoutLevel : 0.0)
+string virginPivotLabel = bounceIsVirgin ? bouncePivotType : (breakoutIsVirgin ? breakoutPivotType : "")
+
+alertcondition(virginTestOccurring and virginLevel > 0, "INFO: Virgin Pivot Test",
+               "INFO: Price testing Virgin Pivot " + virginPivotLabel + " at " + str.tostring(virginLevel, "#.##"))
